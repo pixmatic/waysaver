@@ -2,12 +2,25 @@
 name = "waysaver"
 version = "1.0.0-beta.1"
 edition = "2024"
+# Set by wayland-protocols; checked by building every feature with it.
+rust-version = "1.86"
 description = "A minimal Wayland screensaver: black screen or any program as a theme, respecting inhibitors"
 license = "GPL-3.0-or-later"
 repository = "https://github.com/pixmatic/waysaver"
 readme = "README.md"
 keywords = ["wayland", "screensaver", "idle", "layer-shell"]
 categories = ["command-line-utilities"]
+# What crates.io gets: the program, its example themes and the install
+# script (development scripts stay in the repository).
+include = [
+    "/src",
+    "/examples/themes",
+    "/scripts/install.sh",
+    "/Makefile",
+    "/Cargo.lock",
+    "/README.md",
+    "/LICENSE",
+]
 
 [dependencies]
 dbus = { version = "0.9.12", default-features = false }

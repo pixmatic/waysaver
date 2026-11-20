@@ -1,0 +1,58 @@
+# Maintainer: pixmatic <me@pixmatic.dev>
+
+pkgname=waysaver
+pkgver=1.0.0beta1
+_tag=v1.0.0-beta.1
+pkgrel=1
+pkgdesc='Minimal Wayland screensaver: black screen or any program as a theme, respecting inhibitors'
+arch=('x86_64' 'aarch64')
+url='https://github.com/pixmatic/waysaver'
+license=('GPL-3.0-or-later')
+depends=('dbus' 'gcc-libs' 'glibc')
+makedepends=('cargo')
+optdepends=(
+  'foot: terminal themes (matrix, clock, pipes, aquarium...)'
+  'cmatrix: matrix and matrix-live themes'
+  'figlet: marquee and jumpclock themes'
+  'tty-clock: clock theme'
+  'asciiquarium: aquarium theme'
+  'pipes.sh: pipes theme'
+  'cbonsai: bonsai theme'
+  'ffmpeg: life, mandelbrot and blur themes'
+  'mpv: video and blur themes'
+  'grim: blur theme'
+  'python-pygame: pipes3d theme'
+  'chromium: browser themes (text3d, maze3d, shadertoy, web), or firefox'
+  'firefox: browser themes (text3d, maze3d, shadertoy, web), or chromium'
+  'glslviewer: shader theme'
+)
+install=waysaver.install
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/$_tag.tar.gz")
+sha256sums=('a1f515d506f10b3d35387d676c165d6231b37f67f42bf4cc2961f5634f0d3154')
+
+prepare() {
+  cd "$pkgname-${_tag#v}"
+  export RUSTUP_TOOLCHAIN=stable
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+  cd "$pkgname-${_tag#v}"
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR=target
+  cargo build --frozen --release --all-features
+}
+
+check() {
+  cd "$pkgname-${_tag#v}"
+  export RUSTUP_TOOLCHAIN=stable
+  cargo test --frozen --all-features
+}
+
+package() {
+  cd "$pkgname-${_tag#v}"
+  # The binary, the systemd user service and the example themes, staged
+  # without enabling anything (see waysaver.install).
+  make install PREFIX=/usr DESTDIR="$pkgdir" SYSTEMD=yes
+  install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+}

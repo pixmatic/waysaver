@@ -1,0 +1,13 @@
+post_install() {
+  cat <<'EOF'
+waysaver is installed but not enabled. Each user starts it, now and at
+every login, with:
+  systemctl --user enable --now waysaver
+or, for every user at once (as root):
+  systemctl --global enable waysaver
+To change the idle time or the theme: systemctl --user edit waysaver
+Themes are in /usr/share/waysaver/themes; see /usr/share/doc/waysaver/README.md.
+Sessions without graphical-session.target (XFCE, LXQt, labwc...) need it in
+their autostart instead: /usr/bin/waysaver 300 blank
+EOF
+}
