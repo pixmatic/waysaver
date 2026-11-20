@@ -3,6 +3,7 @@ name = "waysaver"
 version = "0.1.0"
 edition = "2024"
 description = "A minimal Wayland screensaver: black screen or any program as a theme, respecting inhibitors"
+license = "GPL-3.0-or-later"
 repository = "https://github.com/pixmatic/waysaver"
 readme = "README.md"
 keywords = ["wayland", "screensaver", "idle", "layer-shell"]

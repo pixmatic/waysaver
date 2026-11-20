@@ -370,3 +370,7 @@ To also see every Wayland message, run it with `WAYLAND_DEBUG=1`.
 - `scripts/check.sh`: formatting, then clippy (no warnings) and tests for **every combination** of features. Needs [cargo-hack](https://github.com/taiki-e/cargo-hack).
 - `scripts/nested.sh`: runs waysaver inside a nested labwc (in a window, with its own D-Bus session), so it can be tested without blanking your real screen. `OUTPUTS=2 FEATURES=multimonitor scripts/nested.sh 5` gives two virtual monitors; inside, F1/F2 add or remove monitors.
 - Each feature lives in its own files, with an empty stub (`*_off.rs`) used when it is disabled; the core code has no `#[cfg]`. See the module documentation in `src/main.rs`.
+
+## License
+
+waysaver, including the example themes and scripts, is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version. See [`LICENSE`](LICENSE).
