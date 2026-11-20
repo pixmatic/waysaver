@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Big clock that jumps to a random spot of the terminal every few seconds,
+# so nothing stays on the same pixels (avoids burn-in on OLED screens).
+#
+#   jumpclock [seconds]     # default: jump every 10 seconds
+#
+# Requires figlet. Example as a wayvoid theme:
+#   wayvoid 300 foot -o colors-dark.background=000000 --fullscreen \
+#       sh -c 'sleep 0.3; exec examples/jumpclock 10'
+every=${1:-10}
+tput civis
+trap 'tput cnorm' EXIT
+while :; do
+    text=$(figlet -f big "$(date +%H:%M)")
+    w=$(wc -L <<<"$text")
+    h=$(wc -l <<<"$text")
+    y=$((RANDOM % ($(tput lines) - h + 1)))
+    x=$((RANDOM % ($(tput cols) - w + 1)))
+    clear
+    i=0
+    while IFS= read -r line; do
+        tput cup $((y + i)) "$x"
+        printf '%s' "$line"
+        i=$((i + 1))
+    done <<<"$text"
+    sleep "$every"
+done
