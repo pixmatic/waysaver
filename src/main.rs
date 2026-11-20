@@ -5,7 +5,7 @@
 //! The compositor tracks idle time and inhibitors (ext-idle-notify-v1),
 //! so the process just sleeps in a blocking dispatch loop.
 
-use std::{fs::File, io::Write, os::fd::AsFd, process::ExitCode};
+use std::{fs::File, io::Write, os::fd::AsFd, process::ExitCode, sync::OnceLock};
 
 use wayland_client::{
     Connection, Dispatch, Proxy, QueueHandle, WEnum, delegate_noop,
@@ -32,6 +32,42 @@ use wayland_protocols_wlr::layer_shell::v1::client::{
     zwlr_layer_shell_v1::{Layer, ZwlrLayerShellV1},
     zwlr_layer_surface_v1::{self, Anchor, KeyboardInteractivity, ZwlrLayerSurfaceV1},
 };
+
+// --- Logging -----------------------------------------------------------------
+
+/// syslog priorities understood by journald as `<N>` line prefixes.
+const ERR: u8 = 3;
+const WARNING: u8 = 4;
+const INFO: u8 = 6;
+
+/// True when stderr is connected to the systemd journal.
+/// systemd exports `JOURNAL_STREAM=<dev>:<inode>` for the stream it hands us;
+/// comparing it with stderr avoids false positives from inherited variables.
+fn stderr_is_journal() -> bool {
+    static CACHE: OnceLock<bool> = OnceLock::new();
+    *CACHE.get_or_init(|| {
+        let Ok(var) = std::env::var("JOURNAL_STREAM") else {
+            return false;
+        };
+        let Ok(stat) = rustix::fs::fstat(std::io::stderr()) else {
+            return false;
+        };
+        var == format!("{}:{}", stat.st_dev, stat.st_ino)
+    })
+}
+
+/// Writes one log line to stderr.
+/// In the journal: `<N>msg`, so the priority is kept and filterable (`-p`).
+/// In a terminal: `wayvoid: msg`.
+fn log(priority: u8, msg: &str) {
+    if stderr_is_journal() {
+        eprintln!("<{priority}>{msg}");
+    } else {
+        eprintln!("wayvoid: {msg}");
+    }
+}
+
+// --- State --------------------------------------------------------------------
 
 /// The black overlay currently on screen, if any.
 struct Overlay {
@@ -168,6 +204,10 @@ fn run(timeout_ms: u32) -> Result<(), String> {
 
     // v1 notification: respects idle inhibitors (video, games...).
     notifier.get_idle_notification(timeout_ms, &seat, &qh, ());
+    log(
+        INFO,
+        &format!("started, idle timeout {}s", timeout_ms / 1000),
+    );
 
     // Sleep until the compositor sends events: 0% CPU while idle.
     loop {
@@ -179,13 +219,13 @@ fn run(timeout_ms: u32) -> Result<(), String> {
 
 fn main() -> ExitCode {
     let Some(timeout_ms) = parse_timeout_ms() else {
-        eprintln!("usage: wayvoid <idle-seconds>");
+        log(ERR, "usage: wayvoid <idle-seconds>");
         return ExitCode::from(2);
     };
     match run(timeout_ms) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("wayvoid: {e}");
+            log(ERR, &e);
             ExitCode::FAILURE
         }
     }
@@ -204,8 +244,14 @@ impl Dispatch<ExtIdleNotificationV1, ()> for State {
         qh: &QueueHandle<Self>,
     ) {
         match event {
-            ext_idle_notification_v1::Event::Idled => state.show(qh),
-            ext_idle_notification_v1::Event::Resumed => state.hide(),
+            ext_idle_notification_v1::Event::Idled => {
+                log(INFO, "idle: screen blanked");
+                state.show(qh);
+            }
+            ext_idle_notification_v1::Event::Resumed => {
+                log(INFO, "activity resumed: screen restored");
+                state.hide();
+            }
             _ => {}
         }
     }
@@ -239,7 +285,10 @@ impl Dispatch<ZwlrLayerSurfaceV1, ()> for State {
                 overlay.surface.commit();
             }
             // The compositor dropped our surface (e.g. output gone).
-            zwlr_layer_surface_v1::Event::Closed => state.hide(),
+            zwlr_layer_surface_v1::Event::Closed => {
+                log(WARNING, "overlay closed by the compositor");
+                state.hide();
+            }
             _ => {}
         }
     }
