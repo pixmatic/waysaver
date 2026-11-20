@@ -2,13 +2,28 @@
 //!
 //! After N seconds of inactivity it covers the screen with a black
 //! layer-shell surface, and removes it as soon as activity resumes.
-//! The compositor tracks idle time and inhibitors (ext-idle-notify-v1),
-//! so the process just sleeps in a blocking dispatch loop.
+//! The compositor tracks idle time and Wayland inhibitors (ext-idle-notify-v1).
+//! Apps that inhibit through D-Bus instead (e.g. Firefox) are served by the
+//! `org.freedesktop.ScreenSaver` service in `screensaver.rs`.
+//! A single thread blocks in poll() on both sockets: 0% CPU while idle.
 
-use std::{fs::File, io::Write, os::fd::AsFd, process::ExitCode, sync::OnceLock};
+mod screensaver;
+
+use std::{
+    fs::File,
+    io::{ErrorKind, Write},
+    os::fd::{AsFd, BorrowedFd},
+    process::ExitCode,
+    sync::OnceLock,
+};
+
+use rustix::event::{PollFd, PollFlags, poll};
+use screensaver::ScreenSaver;
 
 use wayland_client::{
-    Connection, Dispatch, Proxy, QueueHandle, WEnum, delegate_noop,
+    Connection, Dispatch, Proxy, QueueHandle, WEnum,
+    backend::WaylandError,
+    delegate_noop,
     globals::{GlobalList, GlobalListContents, registry_queue_init},
     protocol::{
         wl_buffer::WlBuffer,
@@ -87,6 +102,11 @@ impl Overlay {
 
 /// Global objects needed at runtime plus the current overlay.
 struct State {
+    notifier: ExtIdleNotifierV1,
+    seat: WlSeat,
+    timeout_ms: u32,
+    /// Active idle notification; `None` while a D-Bus inhibitor is held.
+    notification: Option<ExtIdleNotificationV1>,
     compositor: WlCompositor,
     viewporter: WpViewporter,
     layer_shell: ZwlrLayerShellV1,
@@ -133,6 +153,25 @@ impl State {
     fn hide(&mut self) {
         if let Some(overlay) = self.overlay.take() {
             overlay.destroy();
+        }
+    }
+
+    /// Applies the D-Bus inhibition state. While inhibited there is no idle
+    /// notification at all, so the compositor never tells us to blank; when
+    /// released, a fresh notification restarts the idle countdown from zero.
+    fn set_inhibited(&mut self, inhibited: bool, qh: &QueueHandle<Self>) {
+        if inhibited {
+            if let Some(notification) = self.notification.take() {
+                notification.destroy();
+                self.hide();
+            }
+        } else if self.notification.is_none() {
+            // v1 notification: respects Wayland idle inhibitors (Chrome, games...).
+            self.notification =
+                Some(
+                    self.notifier
+                        .get_idle_notification(self.timeout_ms, &self.seat, qh, ()),
+                );
         }
     }
 }
@@ -189,10 +228,12 @@ fn run(timeout_ms: u32) -> Result<(), String> {
     let qh = queue.handle();
 
     let shm: WlShm = bind(&globals, &qh, 1..=1)?;
-    let seat: WlSeat = bind(&globals, &qh, 1..=1)?;
-    let notifier: ExtIdleNotifierV1 = bind(&globals, &qh, 1..=1)?;
 
     let mut state = State {
+        notifier: bind(&globals, &qh, 1..=1)?,
+        seat: bind(&globals, &qh, 1..=1)?,
+        timeout_ms,
+        notification: None,
         compositor: bind(&globals, &qh, 1..=4)?,
         viewporter: bind(&globals, &qh, 1..=1)?,
         // v1 is enough: `Exclusive` (1) matches the old boolean "true".
@@ -202,19 +243,81 @@ fn run(timeout_ms: u32) -> Result<(), String> {
         overlay: None,
     };
 
-    // v1 notification: respects idle inhibitors (video, games...).
-    notifier.get_idle_notification(timeout_ms, &seat, &qh, ());
+    // Optional: without a session bus (or if the name is taken) we keep
+    // working with Wayland inhibitors only.
+    let mut screensaver = ScreenSaver::new()
+        .inspect_err(|e| screensaver::warn_unavailable(e))
+        .ok();
+
+    state.set_inhibited(false, &qh);
     log(
         INFO,
         &format!("started, idle timeout {}s", timeout_ms / 1000),
     );
 
-    // Sleep until the compositor sends events: 0% CPU while idle.
+    // Messages may already be buffered from the startup calls.
+    let mut bus_ready = true;
     loop {
-        queue
-            .blocking_dispatch(&mut state)
-            .map_err(|e| format!("dispatch: {e}"))?;
+        if bus_ready && let Some(ss) = &mut screensaver {
+            match ss.dispatch() {
+                Ok(()) => state.set_inhibited(ss.is_inhibited(), &qh),
+                Err(e) => {
+                    screensaver::warn_unavailable(&e);
+                    screensaver = None;
+                    state.set_inhibited(false, &qh);
+                }
+            }
+        }
+
+        // Send our requests, then block until either socket has data.
+        queue.flush().map_err(|e| format!("flush: {e}"))?;
+        // `prepare_read` returns None if events are already queued.
+        let Some(guard) = queue.prepare_read() else {
+            dispatch(&mut queue, &mut state)?;
+            continue;
+        };
+        let wl_ready;
+        {
+            let wl_fd = guard.connection_fd();
+            // SAFETY: the fd belongs to `screensaver`'s channel, which outlives this block.
+            let bus_fd = screensaver
+                .as_ref()
+                .map(|ss| unsafe { BorrowedFd::borrow_raw(ss.fd()) });
+            let mut fds = vec![PollFd::new(&wl_fd, PollFlags::IN)];
+            if let Some(fd) = &bus_fd {
+                fds.push(PollFd::new(fd, PollFlags::IN));
+            }
+            match poll(&mut fds, None) {
+                Ok(_) => {}
+                Err(rustix::io::Errno::INTR) => continue,
+                Err(e) => return Err(format!("poll: {e}")),
+            }
+            // Any revents (IN, HUP, ERR) means "go read": errors surface there.
+            wl_ready = !fds[0].revents().is_empty();
+            bus_ready = fds.get(1).is_some_and(|fd| !fd.revents().is_empty());
+        }
+
+        if wl_ready {
+            match guard.read() {
+                Ok(_) => {}
+                Err(WaylandError::Io(e)) if e.kind() == ErrorKind::WouldBlock => {}
+                Err(e) => return Err(format!("Wayland read: {e}")),
+            }
+        }
+        // (Dropping an unused guard cancels the read.)
+        dispatch(&mut queue, &mut state)?;
     }
+}
+
+/// Runs the handlers for all Wayland events read so far.
+fn dispatch(
+    queue: &mut wayland_client::EventQueue<State>,
+    state: &mut State,
+) -> Result<(), String> {
+    queue
+        .dispatch_pending(state)
+        .map(|_| ())
+        .map_err(|e| format!("dispatch: {e}"))
 }
 
 fn main() -> ExitCode {
