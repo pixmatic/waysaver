@@ -2,6 +2,8 @@
 
 A minimal screensaver for Wayland, written in Rust.
 
+> **Beta.** waysaver is feature-complete, and its command line and theme convention are not expected to change before 1.0. So far it has been tested on labwc (also nested, through `scripts/nested.sh`); it should work on any compositor listed under [Requirements](#requirements), but they haven't been tried one by one yet. Reports from Sway, Hyprland, niri, KDE, COSMIC and others are very welcome.
+
 After a period of inactivity it covers the screen with pure black, and removes it as soon as there is activity again. Optionally it can run any program as a theme instead: a video, an animated GIF, a terminal animation, a WebGL page, a GLSL shader...
 
 - **Tiny and idle-friendly**: a single thread blocked in `poll()`, 0% CPU while waiting, ~4 MB of memory. The compositor keeps track of idle time; waysaver just sleeps until it is told.
