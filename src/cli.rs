@@ -87,7 +87,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Command, String> 
             _ if arg.starts_with("--log-level=") => {
                 log_level = parse_log_level(&arg["--log-level=".len()..])?;
             }
-            _ if ignore_mouse.option(&arg) || theme.option(&arg) => {}
+            _ if ignore_mouse.option(&arg, &mut args)? || theme.option(&arg, &mut args)? => {}
             _ if arg.starts_with('-') => return Err(format!("unknown option: {arg}")),
             _ if timeout_ms.is_some() => return Err(format!("unexpected argument: {arg}")),
             _ => timeout_ms = Some(parse_timeout_ms(&arg)?),

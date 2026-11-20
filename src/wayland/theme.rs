@@ -38,7 +38,7 @@ pub struct Theme {
 
 impl Theme {
     pub fn new(config: &Config, shm: &WlShm, qh: &QueueHandle<State>) -> Result<Self, String> {
-        let runner = config.theme.argv().map(Runner::new);
+        let runner = (config.theme.argv()).map(|argv| Runner::new(argv, config.theme.max_restarts));
         let transparent = match runner {
             Some(_) => Some(pixel_buffer(shm, qh, 0x0000_0000)?),
             None => None,

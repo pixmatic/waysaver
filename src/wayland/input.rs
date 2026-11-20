@@ -40,11 +40,16 @@ pub struct Options {
 }
 
 impl Options {
-    /// Handles one option before `<idle-seconds>`; `false` if not ours.
-    pub fn option(&mut self, arg: &str) -> bool {
+    /// Handles one option before `<idle-seconds>`, taking its value from
+    /// `args` if it has one. `Ok(false)` if the option isn't ours.
+    pub fn option(
+        &mut self,
+        arg: &str,
+        _args: &mut dyn Iterator<Item = String>,
+    ) -> Result<bool, String> {
         let ours = arg == "--ignore-mouse";
         self.enabled |= ours;
-        ours
+        Ok(ours)
     }
 }
 

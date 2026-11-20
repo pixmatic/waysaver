@@ -14,8 +14,12 @@ pub const USAGE: &[&str] = &[];
 pub struct Options {}
 
 impl Options {
-    pub fn option(&mut self, _arg: &str) -> bool {
-        false
+    pub fn option(
+        &mut self,
+        _arg: &str,
+        _args: &mut dyn Iterator<Item = String>,
+    ) -> Result<bool, String> {
+        Ok(false)
     }
 
     pub fn set_theme(&mut self, _argv: Vec<String>) {}
@@ -36,5 +40,6 @@ mod tests {
     #[test]
     fn backdrop_unknown_without_feature() {
         assert!(run(&["--backdrop", "10"]).is_err());
+        assert!(run(&["--max-restarts", "3", "10"]).is_err());
     }
 }

@@ -56,6 +56,7 @@ Options (only those compiled in are accepted and shown by `--help`):
 | `-l`, `--log-level LEVEL` | | What to log, from `0`/`none` to `4`/`debug` (see [Logs](#logs)); default `warning`. |
 | `--ignore-mouse` | `ignore-mouse` | Don't wake up on mouse motion. |
 | `--backdrop` | `theme` | Black background below the theme while it starts (see [notes](#how-themes-work)). |
+| `--max-restarts N` | `theme` | How many times a failing theme is restarted, per monitor and idle period (default 3; see [notes](#how-themes-work)). |
 
 Whatever wakes the screen up (a key, a click) is swallowed: it never reaches the application underneath.
 
@@ -183,7 +184,13 @@ waysaver --ignore-mouse 600 blank
 - The theme must make itself **fullscreen** (or maximized and transparent). It runs directly, without a shell; wrap it in `sh -c '...'` for variables, pipes or several commands.
 - With `multimonitor` one instance runs per monitor, with its name in `$WAYSAVER_OUTPUT` (e.g. `HDMI-A-1`).
 - On wake, the theme and anything it started get `SIGTERM`. It never outlives waysaver.
-- If the theme exits on its own it is restarted. If it exits within 2 seconds, it is considered broken: that monitor goes black instead.
+- The theme is checked when waysaver starts: if it can't be found or isn't executable, waysaver exits with an error right away, instead of failing at the first blank.
+- If the theme exits on its own:
+  - within 2 seconds, it is considered broken: it isn't restarted and that monitor goes black;
+  - cleanly (exit code 0), it is restarted, as often as needed;
+  - with an error or a signal, it is restarted up to `--max-restarts` times in a row (default 3) on that monitor; after that the monitor goes black. The count starts over at every idle period.
+
+  When a theme gives up, the warning includes its last error lines, which usually say why.
 - Many programs ask not to be interrupted while they run (SDL games and players, browsers...). Requests made **through D-Bus** by the theme itself are recognized and ignored. Requests made **through Wayland** (`zwp_idle_inhibit`, e.g. mpv) can't be told apart, because the compositor handles them: they may wake the screen right away. Disable them in the theme (`mpv --stop-screensaver=no`).
 - `--backdrop` puts a black surface below the theme so the desktop isn't visible while it starts. It needs the compositor to stack fullscreen windows above the `top` layer; otherwise the black would hide the theme.
 

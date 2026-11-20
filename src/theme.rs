@@ -63,24 +63,56 @@ pub const DESCRIPTION: &[&str] = &[
 /// `--help` lines for this feature's options.
 pub const USAGE: &[&str] = &[
     "      --backdrop      black background below the theme's window (hides the desktop while it starts)",
+    "      --max-restarts N",
+    "                      times a failing theme is restarted, per monitor and idle period (default 3)",
 ];
 
+/// `--max-restarts` when not given.
+const DEFAULT_MAX_RESTARTS: u32 = 3;
+
 /// This feature's part of the configuration.
-#[derive(Default)]
 pub struct Options {
     /// Program and arguments, as given; `blank` is turned into an empty list
     /// by `validate`.
     argv: Vec<String>,
     /// `--backdrop`: a black surface below the theme's window.
     pub backdrop: bool,
+    /// `--max-restarts`: how many times a theme that fails (exits with an
+    /// error or a signal) is restarted, per monitor and idle period.
+    pub max_restarts: u32,
+}
+
+impl Default for Options {
+    fn default() -> Self {
+        Self {
+            argv: Vec::new(),
+            backdrop: false,
+            max_restarts: DEFAULT_MAX_RESTARTS,
+        }
+    }
 }
 
 impl Options {
-    /// Handles one option before `<idle-seconds>`; `false` if not ours.
-    pub fn option(&mut self, arg: &str) -> bool {
-        let ours = arg == "--backdrop";
-        self.backdrop |= ours;
-        ours
+    /// Handles one option before `<idle-seconds>`, taking its value from
+    /// `args` if it has one. `Ok(false)` if the option isn't ours.
+    pub fn option(
+        &mut self,
+        arg: &str,
+        args: &mut dyn Iterator<Item = String>,
+    ) -> Result<bool, String> {
+        let value = match arg.split_once('=') {
+            Some(("--max-restarts", value)) => value.to_string(),
+            _ if arg == "--max-restarts" => args.next().ok_or("--max-restarts needs a number")?,
+            _ => {
+                let ours = arg == "--backdrop";
+                self.backdrop |= ours;
+                return Ok(ours);
+            }
+        };
+        self.max_restarts = value
+            .parse()
+            .map_err(|_| format!("invalid --max-restarts: {value} (expected a number)"))?;
+        Ok(true)
     }
 
     /// Takes everything that followed `<idle-seconds>`.
@@ -100,6 +132,16 @@ impl Options {
             Some(_) => {
                 if let Some(path) = find_theme(themes_dir().as_deref(), &self.argv[0]) {
                     self.argv[0] = path;
+                }
+                // Caught now rather than on the first blank, which may be
+                // hours away (e.g. a typo in the theme's name).
+                if !is_executable(&self.argv[0]) {
+                    return Err(format!(
+                        "theme not found or not executable: {} (looked in {} and PATH)",
+                        self.argv[0],
+                        themes_dir()
+                            .map_or("the themes directory".into(), |d| d.display().to_string())
+                    ));
                 }
                 Ok(())
             }
@@ -131,6 +173,20 @@ fn find_theme(dir: Option<&Path>, name: &str) -> Option<String> {
     }
     let path = dir?.join(name);
     path.is_file().then(|| path.to_string_lossy().into_owned())
+}
+
+/// Whether `program` can be run: a path to an executable file, or a bare
+/// name found as one in `PATH` (as the shell and `execvp` look it up).
+fn is_executable(program: &str) -> bool {
+    let runnable = |path: &Path| {
+        path.is_file() && rustix::fs::access(path, rustix::fs::Access::EXEC_OK).is_ok()
+    };
+    if program.contains('/') {
+        return runnable(Path::new(program));
+    }
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    // An empty entry means the current directory.
+    std::env::split_paths(&path).any(|dir| runnable(&dir.join(program)))
 }
 
 // --- Processes ----------------------------------------------------------------
@@ -264,19 +320,43 @@ pub struct Exited {
 
 pub struct Runner {
     argv: Vec<String>,
+    /// `--max-restarts`.
+    max_restarts: u32,
     /// Children currently showing the theme.
     live: Vec<Running>,
     /// Children sent SIGTERM, kept until they exit so they can be reaped.
     dying: Vec<Running>,
+    /// Failures in a row per output during this idle period (only outputs
+    /// that had any). Cleared on wake and by a clean exit.
+    failures: Vec<(Option<WlOutput>, u32)>,
 }
 
 impl Runner {
-    pub fn new(argv: &[String]) -> Self {
-        log(DEBUG, &format!("theme: {argv:?}"));
+    pub fn new(argv: &[String], max_restarts: u32) -> Self {
+        log(
+            DEBUG,
+            &format!("theme: {argv:?}, at most {max_restarts} restarts after failures"),
+        );
         Self {
             argv: argv.to_vec(),
+            max_restarts,
             live: Vec::new(),
             dying: Vec::new(),
+            failures: Vec::new(),
+        }
+    }
+
+    /// Counts one more failure for `target`; returns the new count.
+    fn count_failure(&mut self, target: &Option<WlOutput>) -> u32 {
+        match self.failures.iter_mut().find(|(t, _)| t == target) {
+            Some((_, count)) => {
+                *count += 1;
+                *count
+            }
+            None => {
+                self.failures.push((target.clone(), 1));
+                1
+            }
         }
     }
 
@@ -357,6 +437,8 @@ impl Runner {
         while let Some(running) = self.live.pop() {
             self.terminate(running);
         }
+        // A new idle period starts with a clean slate.
+        self.failures.clear();
     }
 
     /// Sends SIGTERM to the child of `target` (its output was unplugged).
@@ -370,6 +452,7 @@ impl Runner {
             let running = self.live.swap_remove(i);
             self.terminate(running);
         }
+        self.failures.retain(|(t, _)| t.as_ref() != Some(target));
     }
 
     fn terminate(&mut self, running: Running) {
@@ -412,22 +495,47 @@ impl Runner {
             };
             let running = self.live.swap_remove(i);
             let label = &running.label;
-            let restart = running.started.elapsed() >= MIN_LIFETIME;
-            if restart {
-                log(INFO, &format!("{label} exited ({status}), restarting"));
+            // Its last words usually say why it failed (e.g. a bad option).
+            let said = Vec::from(running.tail.clone()).join(" | ");
+            let said = if said.is_empty() {
+                String::new()
             } else {
-                // Its last words usually say why (e.g. a bad option).
-                let said = Vec::from(running.tail.clone()).join(" | ");
-                let said = if said.is_empty() {
-                    String::new()
-                } else {
-                    format!(": {said}")
-                };
+                format!(": {said}")
+            };
+            let restart = if running.started.elapsed() < MIN_LIFETIME {
                 log(
                     WARNING,
                     &format!("{label} exited too soon ({status}), not restarting{said}"),
                 );
-            }
+                false
+            } else if status.success() {
+                // A clean exit is a theme that ends by design: restart it,
+                // without counting it as a failure.
+                self.failures.retain(|(t, _)| *t != running.target);
+                log(INFO, &format!("{label} exited ({status}), restarting"));
+                true
+            } else {
+                let count = self.count_failure(&running.target);
+                if count > self.max_restarts {
+                    log(
+                        WARNING,
+                        &format!(
+                            "{label} failed {count} times in a row ({status}), \
+                             not restarting{said}"
+                        ),
+                    );
+                    false
+                } else {
+                    log(
+                        INFO,
+                        &format!(
+                            "{label} failed ({status}), restarting ({count} of {} restarts)",
+                            self.max_restarts
+                        ),
+                    );
+                    true
+                }
+            };
             exited.push(Exited {
                 target: running.target,
                 restart,
@@ -478,7 +586,7 @@ pub fn is_own_descendant(pid: u32) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{find_theme, is_own_descendant};
+    use super::{DEFAULT_MAX_RESTARTS, find_theme, is_executable, is_own_descendant};
     use crate::cli::test_util::{config, run};
 
     #[test]
@@ -488,8 +596,30 @@ mod tests {
         assert_eq!(cmd(&["10", "blank"]), Some(None));
         assert!(run(&["10", "blank", "x"]).is_err());
         // Everything after the seconds is the theme, options included.
-        let mpv = ["mpv", "--fs", "-h", "blank"].map(String::from).to_vec();
-        assert_eq!(cmd(&["10", "mpv", "--fs", "-h", "blank"]), Some(Some(mpv)));
+        let sh = ["sh", "-c", "-h", "blank"].map(String::from).to_vec();
+        assert_eq!(cmd(&["10", "sh", "-c", "-h", "blank"]), Some(Some(sh)));
+        // A theme that can't be run is a usage error, caught at startup.
+        assert!(run(&["10", "no-such-theme-waysaver"]).is_err());
+        assert!(run(&["10", "/etc/hostname"]).is_err(), "not executable");
+    }
+
+    #[test]
+    fn executables() {
+        assert!(is_executable("sh"), "found in PATH");
+        assert!(is_executable("/bin/sh"));
+        assert!(!is_executable("no-such-program-waysaver"));
+        assert!(!is_executable("/etc"), "a directory");
+        assert!(!is_executable("/etc/hostname"), "not executable");
+    }
+
+    #[test]
+    fn max_restarts_option() {
+        let max = |args: &[&str]| config(run(args)).map(|c| c.theme.max_restarts);
+        assert_eq!(max(&["10", "blank"]), Some(DEFAULT_MAX_RESTARTS));
+        assert_eq!(max(&["--max-restarts", "0", "10", "blank"]), Some(0));
+        assert_eq!(max(&["--max-restarts=7", "10", "blank"]), Some(7));
+        assert!(run(&["--max-restarts", "x", "10", "blank"]).is_err());
+        assert!(run(&["--max-restarts"]).is_err());
     }
 
     #[test]

@@ -17,8 +17,12 @@ pub const USAGE: &[&str] = &[];
 pub struct Options {}
 
 impl Options {
-    pub fn option(&mut self, _arg: &str) -> bool {
-        false
+    pub fn option(
+        &mut self,
+        _arg: &str,
+        _args: &mut dyn Iterator<Item = String>,
+    ) -> Result<bool, String> {
+        Ok(false)
     }
 }
 
