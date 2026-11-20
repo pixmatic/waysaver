@@ -28,6 +28,15 @@ cargo build --release --all-features               # everything
 
 The binary ends up in `target/release/waysaver`.
 
+Or with `make`, a thin wrapper around cargo that builds every feature by default. Choose the features on the command line, or once in a `config.mk` file (not tracked by git), as suckless tools do:
+
+```sh
+make                                  # every feature
+make FEATURES="theme multimonitor"    # some of them
+make FEATURES=                        # minimal
+echo 'FEATURES = theme' > config.mk   # remembered for later builds
+```
+
 | Feature | What it adds |
 |---|---|
 | *(none)* | Black screen on the current monitor. |
@@ -66,7 +75,7 @@ A theme is what waysaver shows instead of black. It is just a program: waysaver 
 
 ### Installing the example themes
 
-This repository ships ready-made themes in [`examples/themes/`](examples/themes). Copy them to your themes directory, `~/.config/waysaver/themes/` (`$XDG_CONFIG_HOME/waysaver/themes/`), and call them by name:
+This repository ships ready-made themes in [`examples/themes/`](examples/themes). [`scripts/install.sh`](#installing) installs them; to do it by hand, copy them to your themes directory, `~/.config/waysaver/themes/` (`$XDG_CONFIG_HOME/waysaver/themes/`), and call them by name:
 
 ```sh
 mkdir -p ~/.config/waysaver/themes
@@ -239,35 +248,94 @@ A GNOME backend could be built from a fullscreen window plus GNOME's D-Bus APIs,
 
 The right way to build a screensaver for GNOME is a **separate project as a GNOME Shell extension**: extensions run inside gnome-shell, the only place with the privileges to draw above everything and handle input properly.
 
-## Running at login
+## Installing
 
-Add it to your compositor's autostart, e.g. Sway:
-
-```
-exec waysaver 300 blank
-```
-
-Or as a systemd user service, `~/.config/systemd/user/waysaver.service`:
-
-```ini
-[Unit]
-Description=waysaver screensaver
-PartOf=graphical-session.target
-After=graphical-session.target
-
-[Service]
-ExecStart=%h/.local/bin/waysaver 300 blank
-Restart=on-failure
-
-[Install]
-WantedBy=graphical-session.target
-```
+Build it as yourself (never with `sudo`: cargo and the Rust toolchain are per user), then install it under `/usr/local`, as is usual for software built from source:
 
 ```sh
-systemctl --user enable --now waysaver.service
+make                          # or: cargo build --release --all-features
+sudo make install             # for every user, enabled for all of them (or: sudo scripts/install.sh)
 ```
 
-(Your compositor must start `graphical-session.target` and pass `WAYLAND_DISPLAY` to the systemd user environment, which most setups already do.)
+Without `sudo`, it installs just for you, under `~/.local` and `~/.config`:
+
+```sh
+make install                  # or: scripts/install.sh
+```
+
+`make install` runs `scripts/install.sh` and never builds, so cargo doesn't run as root. Script options go in `INSTALL_FLAGS`, e.g. `sudo make install INSTALL_FLAGS=--autostart`; `make uninstall` undoes it (with `sudo` for a system-wide install).
+
+| | `sudo make install` | `make install` |
+|---|---|---|
+| Binary | `/usr/local/bin/waysaver` | `~/.local/bin/waysaver` |
+| systemd user service | `/usr/local/lib/systemd/user/waysaver.service` | `~/.config/systemd/user/waysaver.service` |
+| Example themes | `/usr/local/share/waysaver/themes/` | `~/.config/waysaver/themes/` (your edited copies are kept) |
+| Enabled | for every user, by the script: `systemctl --global enable waysaver` | by you: `systemctl --user enable --now waysaver` |
+
+The service is a **user** service in both cases: a screensaver must run inside each user's graphical session, which a system service can't reach.
+
+- **Installed with `sudo`**, it is enabled globally (as PipeWire is): it starts in every user's session from their next login (`systemctl --user start waysaver` starts it right away). A user who doesn't want it opts out, and the administrator can disable it for everyone:
+
+  ```sh
+  systemctl --user mask waysaver              # one user opts out
+  sudo systemctl --global disable waysaver    # disabled for everyone
+  ```
+
+- **Installed just for you**, you enable it yourself, and it starts now and at every login:
+
+  ```sh
+  systemctl --user enable --now waysaver
+  ```
+
+Notes:
+
+- By default it runs `waysaver 300 blank`: black after 5 minutes. To change the idle time, the theme or the options, run `systemctl --user edit waysaver` and override `ExecStart`:
+
+  ```ini
+  [Service]
+  ExecStart=
+  ExecStart=/usr/local/bin/waysaver --max-restarts 5 600 matrix --color cyan
+  ```
+
+- Themes are looked up in `~/.config/waysaver/themes/` first, then in the system-wide `/usr/local/share/waysaver/themes/` and `/usr/share/waysaver/themes/` (`$XDG_DATA_DIRS`), then in `PATH`. To customize a system-wide theme, copy it to your own directory and edit it there.
+- The service starts with `graphical-session.target`, which Sway, Hyprland, niri and KDE usually start. Some sessions don't (XFCE, LXQt, labwc...): install with `--autostart` to also add an XDG autostart entry (`~/.config/autostart/` or `/etc/xdg/autostart/`) that starts the service at login. You can also skip the service and add `waysaver 300 blank` to your compositor's autostart, e.g. `exec waysaver 300 blank` in Sway.
+- Installed just for you, `~/.local/bin` must be in your `PATH` to run `waysaver` by name (the service uses the full path, so it doesn't need it). The script warns you if it isn't.
+- To uninstall: `sudo make uninstall`, or `make uninstall` without `sudo` (`scripts/install.sh --uninstall`). Your own themes in `~/.config/waysaver` are kept.
+
+### Without systemd
+
+On distributions with another init (Gentoo and Alpine with OpenRC, Void with runit, Devuan with sysvinit, Artix...), the script installs the binary and the themes, but no service: those inits run system services, outside the user's graphical session, where a screensaver can't work. Start waysaver from your compositor's autostart instead (with `~/.local/bin` if you installed without `sudo`):
+
+```sh
+exec /usr/local/bin/waysaver 300 blank                   # Sway (and i3-style configs)
+exec-once = /usr/local/bin/waysaver 300 blank            # Hyprland
+spawn-at-startup "/usr/local/bin/waysaver" "300" "blank" # niri
+```
+
+On desktops that read XDG autostart entries (XFCE, LXQt...), install with `--autostart`: without systemd, the entry runs waysaver directly. Everything else works the same; the logind inhibitor source works with elogind too.
+
+### Packaging
+
+`make install` (or `scripts/install.sh`) takes the usual variables:
+
+| Variable | Effect |
+|---|---|
+| `PREFIX=/usr` | Install for every user under this prefix (default `/usr/local` with sudo). Themes go to `$PREFIX/share/waysaver/themes`, which waysaver finds for `/usr` and `/usr/local`. |
+| `DESTDIR=pkg` | Write the files under `pkg/` to build a package from. Nothing is enabled and `systemctl` isn't run: enabling it (`systemctl --global enable waysaver`) is up to the package. |
+| `SYSTEMD=no` | Don't install the systemd user service (by default it is installed when staging with `DESTDIR`, or when systemd is the init). |
+
+```sh
+make FEATURES="multimonitor ignore-mouse theme"
+make install PREFIX=/usr DESTDIR="$pkgdir"
+```
+
+### With cargo only
+
+Without the script, cargo alone installs only the binary:
+
+```sh
+cargo install --path . --all-features --root ~/.local     # ~/.local/bin/waysaver
+```
 
 ## Logs
 

@@ -13,9 +13,10 @@
 //! A theme is any program, run directly (no shell). It is responsible for
 //! showing itself fullscreen on its output, e.g. `mpv --fs --fs-screen-name=...`;
 //! to use `$WAYSAVER_OUTPUT` in its arguments, wrap it in `sh -c '...'`.
-//! A bare name is looked up first in the themes directory
-//! (`$XDG_CONFIG_HOME/waysaver/themes`, see `themes_dir`), then in `PATH`, so
-//! users can keep their themes as small scripts and call them by name.
+//! A bare name is looked up first in the themes directories (the user's
+//! `$XDG_CONFIG_HOME/waysaver/themes`, then the system-wide ones under
+//! `$XDG_DATA_DIRS`, see `themes_dirs`), then in `PATH`, so themes can be kept
+//! as small scripts and called by name.
 //!
 //! This file holds the feature's CLI part (`Options`) and the process side
 //! (`Runner`); the Wayland side is `wayland/theme.rs`. When the feature is
@@ -55,8 +56,9 @@ pub const DESCRIPTION: &[&str] = &[
     "",
     "<theme...> is a program (and its arguments) to run while the screen is idle,",
     "one instance per monitor (with multimonitor, $WAYSAVER_OUTPUT holds the",
-    "monitor's name). A bare name is looked up first in",
-    "$XDG_CONFIG_HOME/waysaver/themes (~/.config/waysaver/themes), then in PATH.",
+    "monitor's name). A bare name is looked up first in ~/.config/waysaver/themes,",
+    "then in /usr/local/share/waysaver/themes and /usr/share/waysaver/themes (from",
+    "$XDG_CONFIG_HOME and $XDG_DATA_DIRS), then in PATH.",
     "`blank` means a plain black screen. Options must come before <idle-seconds>.",
 ];
 
@@ -130,17 +132,18 @@ impl Options {
             }
             Some("blank") => Err("`blank` takes no arguments".into()),
             Some(_) => {
-                if let Some(path) = find_theme(themes_dir().as_deref(), &self.argv[0]) {
+                let dirs = themes_dirs();
+                if let Some(path) = find_theme(&dirs, &self.argv[0]) {
                     self.argv[0] = path;
                 }
                 // Caught now rather than on the first blank, which may be
                 // hours away (e.g. a typo in the theme's name).
                 if !is_executable(&self.argv[0]) {
+                    let looked: Vec<_> = dirs.iter().map(|d| d.display().to_string()).collect();
                     return Err(format!(
                         "theme not found or not executable: {} (looked in {} and PATH)",
                         self.argv[0],
-                        themes_dir()
-                            .map_or("the themes directory".into(), |d| d.display().to_string())
+                        looked.join(", ")
                     ));
                 }
                 Ok(())
@@ -154,25 +157,35 @@ impl Options {
     }
 }
 
-/// The user's themes directory: `$XDG_CONFIG_HOME/waysaver/themes`, or
-/// `~/.config/waysaver/themes` when that variable is unset or empty.
-fn themes_dir() -> Option<PathBuf> {
-    let config = std::env::var_os("XDG_CONFIG_HOME")
-        .filter(|dir| !dir.is_empty())
+/// The themes directories, in lookup order (XDG base directories): the
+/// user's, `$XDG_CONFIG_HOME/waysaver/themes` (`~/.config/...` by default),
+/// then the system-wide ones, `<dir>/waysaver/themes` for each `<dir>` of
+/// `$XDG_DATA_DIRS` (`/usr/local/share:/usr/share` by default), where a
+/// system-wide install puts them.
+fn themes_dirs() -> Vec<PathBuf> {
+    let var = |name| std::env::var_os(name).filter(|value| !value.is_empty());
+    let config = var("XDG_CONFIG_HOME")
         .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| Path::new(&home).join(".config")))?;
-    Some(config.join("waysaver/themes"))
+        .or_else(|| var("HOME").map(|home| Path::new(&home).join(".config")));
+    let data = var("XDG_DATA_DIRS").unwrap_or_else(|| "/usr/local/share:/usr/share".into());
+    config
+        .into_iter()
+        .chain(std::env::split_paths(&data))
+        .map(|dir| dir.join("waysaver/themes"))
+        .collect()
 }
 
-/// The path of theme `name` in `dir`, if `name` is a bare name (no `/`) and
-/// such a file exists there. Otherwise the name is left for `PATH` lookup
-/// (or used as is, if it is a path).
-fn find_theme(dir: Option<&Path>, name: &str) -> Option<String> {
+/// The path of theme `name` in the first of `dirs` that has it, if `name` is
+/// a bare name (no `/`). Otherwise the name is left for `PATH` lookup (or
+/// used as is, if it is a path).
+fn find_theme(dirs: &[PathBuf], name: &str) -> Option<String> {
     if name.contains('/') {
         return None;
     }
-    let path = dir?.join(name);
-    path.is_file().then(|| path.to_string_lossy().into_owned())
+    dirs.iter()
+        .map(|dir| dir.join(name))
+        .find(|path| path.is_file())
+        .map(|path| path.to_string_lossy().into_owned())
 }
 
 /// Whether `program` can be run: a path to an executable file, or a bare
@@ -635,12 +648,17 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("matrix"), "#!/bin/sh\n").unwrap();
         let found = dir.join("matrix").to_string_lossy().into_owned();
-        assert_eq!(find_theme(Some(&dir), "matrix"), Some(found));
-        // Not in the directory: left for PATH.
-        assert_eq!(find_theme(Some(&dir), "mpv"), None);
+        let missing = dir.join("missing");
+        // Found in the second directory when the first lacks it.
+        assert_eq!(
+            find_theme(&[missing.clone(), dir.clone()], "matrix"),
+            Some(found)
+        );
+        // Not in any directory: left for PATH.
+        assert_eq!(find_theme(std::slice::from_ref(&dir), "mpv"), None);
         // Paths are used as given, never looked up.
-        assert_eq!(find_theme(Some(&dir), "./matrix"), None);
-        assert_eq!(find_theme(None, "matrix"), None);
+        assert_eq!(find_theme(std::slice::from_ref(&dir), "./matrix"), None);
+        assert_eq!(find_theme(&[], "matrix"), None);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
