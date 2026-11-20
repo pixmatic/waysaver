@@ -22,7 +22,7 @@ If the compositor lacks a protocol, wayvoid exits with an error naming it.
 
 ```sh
 cargo build --release                              # minimal: black screen only
-cargo build --release --features command           # with themes
+cargo build --release --features theme             # with themes
 cargo build --release --all-features               # everything
 ```
 
@@ -33,19 +33,19 @@ The binary ends up in `target/release/wayvoid`.
 | *(none)* | Black screen on the current monitor. |
 | `multimonitor` | One cover per monitor, following hotplug. |
 | `ignore-mouse` | The `--ignore-mouse` option: moving the mouse doesn't wake the screen; keys, buttons, scrolling and touch do. |
-| `command` | Themes: run an external program while idle. |
+| `theme` | Themes: run a program while idle (a video, an animation, a web page...). |
 
 Features are independent and can be combined freely.
 
 ## Usage
 
 ```sh
-wayvoid [OPTIONS] <idle-seconds>                   # without the `command` feature
-wayvoid [OPTIONS] <idle-seconds> <command...>      # with it
+wayvoid [OPTIONS] <idle-seconds>                   # without the `theme` feature
+wayvoid [OPTIONS] <idle-seconds> <theme...>        # with it
 ```
 
 - `<idle-seconds>`: inactivity time before blanking (1 to 4294967).
-- `<command...>` (feature `command`): the program to run while idle. Everything after the seconds is the command, so wayvoid's own options go **before** the seconds. `blank` means the plain black screen.
+- `<theme...>` (feature `theme`): the program to run while idle. A bare name is looked up first in `~/.config/wayvoid/themes/` (`$XDG_CONFIG_HOME/wayvoid/themes/`), then in `PATH`. Everything after the seconds is the theme, so wayvoid's own options go **before** the seconds. `blank` means the plain black screen.
 
 Options (only those compiled in are accepted and shown by `--help`):
 
@@ -54,7 +54,7 @@ Options (only those compiled in are accepted and shown by `--help`):
 | `-h`, `--help` | | Show the help. |
 | `-V`, `--version` | | Show the version. |
 | `--ignore-mouse` | `ignore-mouse` | Don't wake up on mouse motion. |
-| `--backdrop` | `command` | Black background below the theme while it starts (see [notes](#how-themes-work)). |
+| `--backdrop` | `theme` | Black background below the theme while it starts (see [notes](#how-themes-work)). |
 
 Whatever wakes the screen up (a key, a click) is swallowed: it never reaches the application underneath.
 
@@ -63,8 +63,8 @@ Whatever wakes the screen up (a key, a click) is swallowed: it never reaches the
 ### Black screen
 
 ```sh
-wayvoid 300                    # build without `command`
-wayvoid 300 blank              # build with `command`
+wayvoid 300                    # build without `theme`
+wayvoid 300 blank              # build with `theme`
 wayvoid --ignore-mouse 600 blank
 ```
 
@@ -149,7 +149,7 @@ wayvoid 300 ffplay -fs -loglevel quiet -f lavfi -i 'life=s=320x180:mold=10:ratio
 
 ### WebGL and HTML5
 
-Any web page in a browser's kiosk mode. Use a **separate profile**: otherwise the browser hands the page to the instance you already have open and the process exits immediately (wayvoid would treat it as a failed command, and couldn't close the window on wake).
+Any web page in a browser's kiosk mode. Use a **separate profile**: otherwise the browser hands the page to the instance you already have open and the process exits immediately (wayvoid would treat it as a failed theme, and couldn't close the window on wake).
 
 ```sh
 # Chromium (or Chrome: google-chrome-stable)

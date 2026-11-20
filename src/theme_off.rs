@@ -1,11 +1,11 @@
-//! Stub of `command.rs`, compiled when the `command` feature is off: the same
-//! API, doing nothing. See `command.rs` for what each item means.
+//! Stub of `theme.rs`, compiled when the `theme` feature is off: the same
+//! API, doing nothing. See `theme.rs` for what each item means.
 //!
 //! Everything here is a constant or a no-op, so the compiler removes it.
 #![allow(dead_code)]
 
 pub const ENABLED: bool = false;
-pub const TAKES_COMMAND: bool = false;
+pub const TAKES_THEME: bool = false;
 pub const SYNOPSIS_TAIL: &str = "";
 pub const DESCRIPTION: &[&str] = &[];
 pub const USAGE: &[&str] = &[];
@@ -18,7 +18,7 @@ impl Options {
         false
     }
 
-    pub fn set_command(&mut self, _argv: Vec<String>) {}
+    pub fn set_theme(&mut self, _argv: Vec<String>) {}
 
     pub fn validate(&mut self) -> Result<(), String> {
         Ok(())

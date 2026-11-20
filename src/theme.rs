@@ -1,4 +1,4 @@
-//! `command` feature: run an external program while the screen is idle.
+//! `theme` feature: run an external program while the screen is idle.
 //!
 //! One child per covered output. Each child gets its own process group, so
 //! stopping it (SIGTERM to the group) also reaches anything it spawned, and a
@@ -6,19 +6,23 @@
 //! through a pidfd per child, polled by the main event loop: no SIGCHLD
 //! handler, no threads, no timers.
 //!
-//! The command is run directly (no shell). It is responsible for showing
-//! itself fullscreen on its output, e.g. `mpv --fs --fs-screen-name=...`;
+//! A theme is any program, run directly (no shell). It is responsible for
+//! showing itself fullscreen on its output, e.g. `mpv --fs --fs-screen-name=...`;
 //! to use `$WAYVOID_OUTPUT` in its arguments, wrap it in `sh -c '...'`.
+//! A bare name is looked up first in the themes directory
+//! (`$XDG_CONFIG_HOME/wayvoid/themes`, see `themes_dir`), then in `PATH`, so
+//! users can keep their themes as small scripts and call them by name.
 //!
 //! This file holds the feature's CLI part (`Options`) and the process side
 //! (`Runner`); the Wayland side is `wayland/theme.rs`. When the feature is
-//! off, `command_off.rs` replaces this file with the same API, empty.
+//! off, `theme_off.rs` replaces this file with the same API, empty.
 
 use std::{
     os::{
         fd::{AsFd, BorrowedFd, OwnedFd},
         unix::process::CommandExt,
     },
+    path::{Path, PathBuf},
     process::{Child, Stdio},
     time::{Duration, Instant},
 };
@@ -33,23 +37,25 @@ pub const ENABLED: bool = true;
 
 // --- Command line -------------------------------------------------------------
 
-/// With this feature a command must follow `<idle-seconds>`.
-pub const TAKES_COMMAND: bool = true;
+/// With this feature a theme must follow `<idle-seconds>`.
+pub const TAKES_THEME: bool = true;
 
 /// Appended to the usage synopsis.
-pub const SYNOPSIS_TAIL: &str = " <command...>";
+pub const SYNOPSIS_TAIL: &str = " <theme...>";
 
 /// Explanation printed under the synopsis.
 pub const DESCRIPTION: &[&str] = &[
     "",
-    "<command...> runs while the screen is idle, one instance per monitor (with",
-    "multimonitor, $WAYVOID_OUTPUT holds the monitor's name). `blank` means a",
-    "plain black screen. Options must come before <idle-seconds>.",
+    "<theme...> is a program (and its arguments) to run while the screen is idle,",
+    "one instance per monitor (with multimonitor, $WAYVOID_OUTPUT holds the",
+    "monitor's name). A bare name is looked up first in",
+    "$XDG_CONFIG_HOME/wayvoid/themes (~/.config/wayvoid/themes), then in PATH.",
+    "`blank` means a plain black screen. Options must come before <idle-seconds>.",
 ];
 
 /// `--help` lines for this feature's options.
 pub const USAGE: &[&str] = &[
-    "      --backdrop      black background below the command's window (hides the desktop while it starts)",
+    "      --backdrop      black background below the theme's window (hides the desktop while it starts)",
 ];
 
 /// This feature's part of the configuration.
@@ -58,7 +64,7 @@ pub struct Options {
     /// Program and arguments, as given; `blank` is turned into an empty list
     /// by `validate`.
     argv: Vec<String>,
-    /// `--backdrop`: a black surface below the command's window.
+    /// `--backdrop`: a black surface below the theme's window.
     pub backdrop: bool,
 }
 
@@ -71,27 +77,53 @@ impl Options {
     }
 
     /// Takes everything that followed `<idle-seconds>`.
-    pub fn set_command(&mut self, argv: Vec<String>) {
+    pub fn set_theme(&mut self, argv: Vec<String>) {
         self.argv = argv;
     }
 
-    /// Checks the command once parsing is done.
+    /// Checks the theme once parsing is done.
     pub fn validate(&mut self) -> Result<(), String> {
         match self.argv.first().map(String::as_str) {
-            None => Err("missing <command> (use `blank` for a black screen)".into()),
+            None => Err("missing <theme> (use `blank` for a black screen)".into()),
             Some("blank") if self.argv.len() == 1 => {
                 self.argv.clear();
                 Ok(())
             }
             Some("blank") => Err("`blank` takes no arguments".into()),
-            Some(_) => Ok(()),
+            Some(_) => {
+                if let Some(path) = find_theme(themes_dir().as_deref(), &self.argv[0]) {
+                    self.argv[0] = path;
+                }
+                Ok(())
+            }
         }
     }
 
-    /// The command to run, or `None` for `blank`.
+    /// The theme to run, or `None` for `blank`.
     pub fn argv(&self) -> Option<&[String]> {
         (!self.argv.is_empty()).then_some(self.argv.as_slice())
     }
+}
+
+/// The user's themes directory: `$XDG_CONFIG_HOME/wayvoid/themes`, or
+/// `~/.config/wayvoid/themes` when that variable is unset or empty.
+fn themes_dir() -> Option<PathBuf> {
+    let config = std::env::var_os("XDG_CONFIG_HOME")
+        .filter(|dir| !dir.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| Path::new(&home).join(".config")))?;
+    Some(config.join("wayvoid/themes"))
+}
+
+/// The path of theme `name` in `dir`, if `name` is a bare name (no `/`) and
+/// such a file exists there. Otherwise the name is left for `PATH` lookup
+/// (or used as is, if it is a path).
+fn find_theme(dir: Option<&Path>, name: &str) -> Option<String> {
+    if name.contains('/') {
+        return None;
+    }
+    let path = dir?.join(name);
+    path.is_file().then(|| path.to_string_lossy().into_owned())
 }
 
 // --- Processes ----------------------------------------------------------------
@@ -120,7 +152,7 @@ pub struct Exited {
 
 pub struct Runner {
     argv: Vec<String>,
-    /// Children currently showing the command.
+    /// Children currently showing the theme.
     live: Vec<Running>,
     /// Children sent SIGTERM, kept until they exit so they can be reaped.
     dying: Vec<Running>,
@@ -140,7 +172,7 @@ impl Runner {
         self.live.iter().any(|r| r.target.as_ref() == target)
     }
 
-    /// Starts the command for `target`. `name` (the output's name, if known)
+    /// Starts the theme for `target`. `name` (the output's name, if known)
     /// is exported as `WAYVOID_OUTPUT`. Failures are logged; returns whether
     /// the child is running.
     pub fn start(&mut self, target: Option<WlOutput>, name: Option<&str>) -> bool {
@@ -162,7 +194,7 @@ impl Runner {
         let process = match cmd.spawn() {
             Ok(process) => process,
             Err(e) => {
-                log(ERR, &format!("command {:?}: {e}", self.argv[0]));
+                log(ERR, &format!("theme {:?}: {e}", self.argv[0]));
                 return false;
             }
         };
@@ -181,7 +213,7 @@ impl Runner {
         log(
             INFO,
             &format!(
-                "command started on {} (pid {pid})",
+                "theme started on {} (pid {pid})",
                 name.unwrap_or("the screen")
             ),
         );
@@ -242,11 +274,11 @@ impl Runner {
             let running = self.live.swap_remove(i);
             let restart = running.started.elapsed() >= MIN_LIFETIME;
             if restart {
-                log(INFO, &format!("command exited ({status}), restarting"));
+                log(INFO, &format!("theme exited ({status}), restarting"));
             } else {
                 log(
                     WARNING,
-                    &format!("command exited too soon ({status}), not restarting"),
+                    &format!("theme exited too soon ({status}), not restarting"),
                 );
             }
             exited.push(Exited {
@@ -267,7 +299,7 @@ impl Drop for Runner {
 }
 
 /// Whether `pid` is a descendant of wayvoid, by walking up its parent chain
-/// in `/proc`. Used to ignore inhibitors requested by our own command.
+/// in `/proc`. Used to ignore inhibitors requested by our own theme.
 /// A process that detached itself (double fork) is no longer recognized.
 pub fn is_own_descendant(pid: u32) -> bool {
     let me = std::process::id();
@@ -299,25 +331,40 @@ pub fn is_own_descendant(pid: u32) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::is_own_descendant;
+    use super::{find_theme, is_own_descendant};
     use crate::cli::test_util::{config, run};
 
     #[test]
-    fn command_argument() {
-        let cmd = |args: &[&str]| config(run(args)).map(|c| c.command.argv().map(<[_]>::to_vec));
-        assert!(run(&["10"]).is_err(), "the command is mandatory");
+    fn theme_argument() {
+        let cmd = |args: &[&str]| config(run(args)).map(|c| c.theme.argv().map(<[_]>::to_vec));
+        assert!(run(&["10"]).is_err(), "the theme is mandatory");
         assert_eq!(cmd(&["10", "blank"]), Some(None));
         assert!(run(&["10", "blank", "x"]).is_err());
-        // Everything after the seconds is the command, options included.
+        // Everything after the seconds is the theme, options included.
         let mpv = ["mpv", "--fs", "-h", "blank"].map(String::from).to_vec();
         assert_eq!(cmd(&["10", "mpv", "--fs", "-h", "blank"]), Some(Some(mpv)));
     }
 
     #[test]
     fn backdrop_flag() {
-        let flag = |args: &[&str]| config(run(args)).map(|c| c.command.backdrop);
+        let flag = |args: &[&str]| config(run(args)).map(|c| c.theme.backdrop);
         assert_eq!(flag(&["10", "blank"]), Some(false));
         assert_eq!(flag(&["--backdrop", "10", "blank"]), Some(true));
+    }
+
+    #[test]
+    fn themes_directory() {
+        let dir = std::env::temp_dir().join(format!("wayvoid-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("matrix"), "#!/bin/sh\n").unwrap();
+        let found = dir.join("matrix").to_string_lossy().into_owned();
+        assert_eq!(find_theme(Some(&dir), "matrix"), Some(found));
+        // Not in the directory: left for PATH.
+        assert_eq!(find_theme(Some(&dir), "mpv"), None);
+        // Paths are used as given, never looked up.
+        assert_eq!(find_theme(Some(&dir), "./matrix"), None);
+        assert_eq!(find_theme(None, "matrix"), None);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

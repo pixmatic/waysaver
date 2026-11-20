@@ -1,4 +1,4 @@
-//! Stub of `theme.rs`, compiled when the `command` feature is off: overlays
+//! Stub of `theme.rs`, compiled when the `theme` feature is off: overlays
 //! are always black and there are no children. See `theme.rs` for what each
 //! item means.
 //!

@@ -20,6 +20,6 @@ multimonitor = []
 # --ignore-mouse: pointer motion doesn't unblank; keys, buttons, scroll and
 # touch still do.
 ignore-mouse = []
-# <command...> argument: run an external program (video, shader, browser...)
+# <theme...> argument: run an external program (video, shader, browser...)
 # while idle; `blank` keeps the black screen.
-command = ["rustix/process", "rustix/std"]
+theme = ["rustix/process", "rustix/std"]

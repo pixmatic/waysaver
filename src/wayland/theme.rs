@@ -1,17 +1,17 @@
-//! `command` feature, Wayland side: show an external program while blanked.
+//! `theme` feature, Wayland side: show an external program while blanked.
 //!
 //! The overlays stay on top of everything (they keep catching input, hiding
 //! the cursor and swallowing the waking key), but show a transparent pixel
-//! while their output's command is running, so the command's own fullscreen
-//! window shows through. If the command isn't running (failed to start, or
+//! while their output's theme is running, so the theme's own fullscreen
+//! window shows through. If the theme isn't running (failed to start, or
 //! exited too soon to be restarted), the overlay falls back to black.
 //!
 //! With `--backdrop`, each output also gets a black layer surface on the `top`
-//! layer, below the command's fullscreen window, so the desktop isn't visible
-//! while the command starts. This relies on the compositor stacking fullscreen
+//! layer, below the theme's fullscreen window, so the desktop isn't visible
+//! while the theme starts. This relies on the compositor stacking fullscreen
 //! windows above the `top` layer, as wlroots-based ones and KWin do.
 //!
-//! The processes themselves are handled by `command::Runner`. When the
+//! The processes themselves are handled by `crate::theme::Runner`. When the
 //! feature is off, `theme_off.rs` replaces this file with the same API, empty.
 
 use std::os::fd::BorrowedFd;
@@ -25,27 +25,27 @@ use wayland_protocols_wlr::layer_shell::v1::client::{
 };
 
 use super::{Overlay, State, pixel_buffer};
-use crate::{cli::Config, command::Runner};
+use crate::{cli::Config, theme::Runner};
 
 /// This feature's part of `State`.
 pub struct Theme {
     /// `None` for `blank`: then everything behaves as without the feature.
     runner: Option<Runner>,
     backdrop: bool,
-    /// Fully transparent 1x1 pixel, created only when there is a command.
+    /// Fully transparent 1x1 pixel, created only when there is a theme.
     transparent: Option<WlBuffer>,
 }
 
 impl Theme {
     pub fn new(config: &Config, shm: &WlShm, qh: &QueueHandle<State>) -> Result<Self, String> {
-        let runner = config.command.argv().map(Runner::new);
+        let runner = config.theme.argv().map(Runner::new);
         let transparent = match runner {
             Some(_) => Some(pixel_buffer(shm, qh, 0x0000_0000)?),
             None => None,
         };
         Ok(Self {
             runner,
-            backdrop: config.command.backdrop,
+            backdrop: config.theme.backdrop,
             transparent,
         })
     }
@@ -57,7 +57,7 @@ pub struct OverlayExt {
     /// A `--backdrop` surface (always black, never takes the keyboard).
     backdrop: bool,
     /// Whether the first `configure` was handled; only then may a different
-    /// buffer be attached (when the command starts or stops).
+    /// buffer be attached (when the theme starts or stops).
     configured: bool,
 }
 
@@ -75,8 +75,8 @@ pub fn buffer_for<'a>(state: &'a State, overlay: &Overlay) -> Option<&'a WlBuffe
     state.theme.transparent.as_ref()
 }
 
-/// With `--backdrop` and a command, adds the black surface below `output`'s
-/// command window.
+/// With `--backdrop` and a theme, adds the black surface below `output`'s
+/// theme window.
 pub fn add_backdrop(state: &mut State, output: Option<WlOutput>, qh: &QueueHandle<State>) {
     if state.theme.backdrop && state.theme.runner.is_some() {
         // No keyboard: the overlay above keeps it.
@@ -86,7 +86,7 @@ pub fn add_backdrop(state: &mut State, output: Option<WlOutput>, qh: &QueueHandl
     }
 }
 
-/// Starts the command on every covered output (right after blanking).
+/// Starts the theme on every covered output (right after blanking).
 pub fn start_all(state: &mut State) {
     if state.theme.runner.is_none() {
         return;
@@ -96,7 +96,7 @@ pub fn start_all(state: &mut State) {
     }
 }
 
-/// Starts the command for `target` if blanked and not already running there.
+/// Starts the theme for `target` if blanked and not already running there.
 /// Used for outputs plugged in while blanked, once their name is known.
 #[cfg_attr(not(feature = "multimonitor"), allow(dead_code))]
 pub fn ensure_started(state: &mut State, target: WlOutput) {
@@ -142,7 +142,7 @@ pub fn fds(state: &State) -> Vec<BorrowedFd<'_>> {
 }
 
 /// Handles children that exited: restarts the ones that lived long enough,
-/// and turns the overlay black where the command is no longer running.
+/// and turns the overlay black where the theme is no longer running.
 pub fn reap(state: &mut State) {
     let Some(runner) = &mut state.theme.runner else {
         return;
@@ -159,7 +159,7 @@ pub fn reap(state: &mut State) {
 }
 
 /// Re-attaches the right buffer to the configured overlays of `target`,
-/// after its command started or stopped.
+/// after its theme started or stopped.
 fn refresh(state: &State, target: Option<&WlOutput>) {
     for overlay in &state.overlays {
         if overlay.ext.configured && overlay.output.as_ref() == target {

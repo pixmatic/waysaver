@@ -30,11 +30,11 @@ struct Inhibitor {
     /// Unique bus name of the caller, used to drop it if the caller exits.
     owner: String,
     app: String,
-    /// Requested by wayvoid's own `command` (e.g. a theme using SDL, which
+    /// Requested by wayvoid's own theme (e.g. one using SDL, which
     /// inhibits by default). Kept so the caller gets a normal reply and can
     /// release it, but never counted: otherwise starting the theme would
     /// unblank the screen and stop the theme, in a loop. Always `false`
-    /// without the `command` feature.
+    /// without the `theme` feature.
     ours: bool,
 }
 
@@ -84,11 +84,11 @@ impl ScreenSaver {
                     // The bus always sets the sender; the default is only
                     // there to avoid an unwrap.
                     let owner = msg.sender().map(|s| s.to_string()).unwrap_or_default();
-                    let ours = self.is_own_command(&owner);
+                    let ours = self.is_own_theme(&owner);
                     if ours {
                         log(
                             INFO,
-                            &format!("ignoring inhibitor from our own command ({app})"),
+                            &format!("ignoring inhibitor from our own theme ({app})"),
                         );
                     } else {
                         log(INFO, &format!("inhibited by {app}: {reason}"));
@@ -144,11 +144,11 @@ impl ScreenSaver {
     }
 
     /// Whether the bus client `owner` is a process started by wayvoid (its
-    /// `command`, or anything that spawned). Asks the bus daemon for the
+    /// theme, or anything it spawned). Asks the bus daemon for the
     /// client's PID; a blocking call, but only made once per `Inhibit`, and
-    /// skipped entirely without the `command` feature.
-    fn is_own_command(&self, owner: &str) -> bool {
-        if !crate::command::ENABLED {
+    /// skipped entirely without the `theme` feature.
+    fn is_own_theme(&self, owner: &str) -> bool {
+        if !crate::theme::ENABLED {
             return false;
         }
         bus::call_daemon(&self.channel, "GetConnectionUnixProcessID", |m| {
@@ -156,7 +156,7 @@ impl ScreenSaver {
         })
         .ok()
         .and_then(|reply| reply.read1::<u32>().ok())
-        .is_some_and(crate::command::is_own_descendant)
+        .is_some_and(crate::theme::is_own_descendant)
     }
 }
 

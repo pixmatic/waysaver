@@ -4,13 +4,13 @@
 //! through their facades (see "Module layout" in main.rs), so this file has no
 //! `#[cfg]`:
 //! - `ignore-mouse` (`wayland::input::Options`): the `--ignore-mouse` flag.
-//! - `command` (`command::Options`): `--backdrop` and the mandatory
-//!   `<command...>` after the seconds.
+//! - `theme` (`theme::Options`): `--backdrop` and the mandatory
+//!   `<theme...>` after the seconds.
 //!
 //! A feature that is not compiled in has a stub with no options, so its
 //! flags are simply unknown, i.e. a usage error.
 
-use crate::{command, wayland::input};
+use crate::{theme, wayland::input};
 
 /// Settings for this run.
 pub struct Config {
@@ -20,7 +20,7 @@ pub struct Config {
     #[allow(dead_code)]
     pub ignore_mouse: input::Options,
     #[allow(dead_code)]
-    pub command: command::Options,
+    pub theme: theme::Options,
 }
 
 /// What the command line asks for.
@@ -42,14 +42,14 @@ const BASE_OPTIONS: &[&str] = &[
 pub fn usage() -> String {
     let mut text = format!(
         "usage: wayvoid [OPTIONS] <idle-seconds>{}\n",
-        command::SYNOPSIS_TAIL
+        theme::SYNOPSIS_TAIL
     );
-    for line in command::DESCRIPTION {
+    for line in theme::DESCRIPTION {
         text.push_str(line);
         text.push('\n');
     }
     text.push_str("\noptions:\n");
-    for line in [BASE_OPTIONS, input::USAGE, command::USAGE].concat() {
+    for line in [BASE_OPTIONS, input::USAGE, theme::USAGE].concat() {
         text.push_str(line);
         text.push('\n');
     }
@@ -61,31 +61,31 @@ pub fn usage() -> String {
 pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Command, String> {
     let mut timeout_ms = None;
     let mut ignore_mouse = input::Options::default();
-    let mut command = command::Options::default();
+    let mut theme = theme::Options::default();
 
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
-        // With `command`, everything after the seconds (options included)
-        // belongs to the command, as with `timeout`.
-        if timeout_ms.is_some() && command::TAKES_COMMAND {
-            command.set_command(std::iter::once(arg).chain(args.by_ref()).collect());
+        // With `theme`, everything after the seconds (options included)
+        // belongs to the theme, as with `timeout`.
+        if timeout_ms.is_some() && theme::TAKES_THEME {
+            theme.set_theme(std::iter::once(arg).chain(args.by_ref()).collect());
             break;
         }
         match arg.as_str() {
             "-h" | "--help" => return Ok(Command::Help),
             "-V" | "--version" => return Ok(Command::Version),
-            _ if ignore_mouse.option(&arg) || command.option(&arg) => {}
+            _ if ignore_mouse.option(&arg) || theme.option(&arg) => {}
             _ if arg.starts_with('-') => return Err(format!("unknown option: {arg}")),
             _ if timeout_ms.is_some() => return Err(format!("unexpected argument: {arg}")),
             _ => timeout_ms = Some(parse_timeout_ms(&arg)?),
         }
     }
     let timeout_ms = timeout_ms.ok_or("missing <idle-seconds>")?;
-    command.validate()?;
+    theme.validate()?;
     Ok(Command::Run(Config {
         timeout_ms,
         ignore_mouse,
-        command,
+        theme,
     }))
 }
 
@@ -108,10 +108,10 @@ pub mod test_util {
         parse(args.iter().map(|s| s.to_string()))
     }
 
-    /// `args` plus the `blank` command when `command` requires one.
+    /// `args` plus the `blank` theme when `theme` requires one.
     pub fn run_blank(args: &[&str]) -> Result<Command, String> {
         let mut args = args.to_vec();
-        if command::TAKES_COMMAND {
+        if theme::TAKES_THEME {
             args.push("blank");
         }
         run(&args)
@@ -128,7 +128,7 @@ pub mod test_util {
 #[cfg(test)]
 mod tests {
     use super::{Command, test_util::*};
-    use crate::command;
+    use crate::theme;
 
     #[test]
     fn timeout_in_milliseconds() {
@@ -147,8 +147,8 @@ mod tests {
     #[test]
     fn missing_and_extra_arguments() {
         assert!(run(&[]).is_err());
-        // Without `command`, nothing may follow the seconds.
-        if !command::TAKES_COMMAND {
+        // Without `theme`, nothing may follow the seconds.
+        if !theme::TAKES_THEME {
             assert!(run(&["10", "20"]).is_err());
             assert!(matches!(run(&["10", "-h"]), Ok(Command::Help)));
         }

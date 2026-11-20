@@ -9,13 +9,13 @@
 //! beyond the module declarations:
 //! - `outputs` (`multimonitor`): which outputs to cover, and hotplug.
 //! - `input` (`ignore-mouse`): waking on keys/buttons instead of `resumed`.
-//! - `theme` (`command`): transparent overlays over an external program.
+//! - `theme` (`theme` feature): transparent overlays over an external program.
 
 #[cfg_attr(not(feature = "ignore-mouse"), path = "wayland/input_off.rs")]
 pub mod input;
 #[cfg_attr(not(feature = "multimonitor"), path = "wayland/outputs_off.rs")]
 mod outputs;
-#[cfg_attr(not(feature = "command"), path = "wayland/theme_off.rs")]
+#[cfg_attr(not(feature = "theme"), path = "wayland/theme_off.rs")]
 mod theme;
 
 use std::{
@@ -66,7 +66,7 @@ struct Overlay {
     surface: WlSurface,
     viewport: WpViewport,
     layer: ZwlrLayerSurfaceV1,
-    /// `theme`'s per-overlay data (empty and never read without `command`).
+    /// `theme`'s per-overlay data (empty and never read without `theme`).
     #[allow(dead_code)]
     ext: theme::OverlayExt,
 }
@@ -189,13 +189,13 @@ impl State {
         }
     }
 
-    /// Fds of external processes to poll (`command`'s children; none without it).
-    pub fn command_fds(&self) -> Vec<BorrowedFd<'_>> {
+    /// Fds of external processes to poll (`theme`'s children; none without it).
+    pub fn theme_fds(&self) -> Vec<BorrowedFd<'_>> {
         theme::fds(self)
     }
 
-    /// Called by the event loop when one of `command_fds` is readable.
-    pub fn command_exited(&mut self) {
+    /// Called by the event loop when one of `theme_fds` is readable.
+    pub fn theme_exited(&mut self) {
         theme::reap(self);
     }
 
@@ -211,7 +211,7 @@ impl State {
         theme::start_all(self);
     }
 
-    /// Unblanks: destroys every overlay (and stops any command).
+    /// Unblanks: destroys every overlay (and stops any theme).
     fn hide(&mut self) {
         self.blanked = false;
         for overlay in self.overlays.drain(..) {

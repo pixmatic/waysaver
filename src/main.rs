@@ -20,13 +20,13 @@
 //! |----------------|------------------------------------------------------|
 //! | `multimonitor` | `wayland/outputs.rs`                                 |
 //! | `ignore-mouse` | `wayland/input.rs`                                   |
-//! | `command`      | `command.rs` (CLI, processes), `wayland/theme.rs`    |
+//! | `theme`        | `theme.rs` (CLI, processes), `wayland/theme.rs`      |
 
 mod cli;
-#[cfg_attr(not(feature = "command"), path = "command_off.rs")]
-mod command;
 mod inhibit;
 mod logging;
+#[cfg_attr(not(feature = "theme"), path = "theme_off.rs")]
+mod theme;
 mod wayland;
 
 use std::{os::fd::BorrowedFd, process::ExitCode};
@@ -113,7 +113,7 @@ fn run(config: &cli::Config) -> Result<(), String> {
             continue;
         };
         // 3. Sleep until any fd is readable: Wayland, then the D-Bus sources,
-        //    then external processes' pidfds (`command`). This inner block
+        //    then external processes' pidfds (`theme`). This inner block
         //    exists so the fd borrows (from `guard`, `sources` and `state`) end
         //    before `guard` is consumed and `state` mutated below.
         let wl_ready;
@@ -127,7 +127,7 @@ fn run(config: &cli::Config) -> Result<(), String> {
                 .collect();
             let mut fds = vec![PollFd::new(&wl_fd, PollFlags::IN)];
             fds.extend(bus_fds.iter().map(|fd| PollFd::new(fd, PollFlags::IN)));
-            let child_fds = state.command_fds();
+            let child_fds = state.theme_fds();
             fds.extend(child_fds.iter().map(|fd| PollFd::new(fd, PollFlags::IN)));
             // No timeout: we only wake up for events, never on a timer.
             match poll(&mut fds, None) {
@@ -153,9 +153,9 @@ fn run(config: &cli::Config) -> Result<(), String> {
         }
         wayland::dispatch(&mut queue, &mut state)?;
 
-        // 5. `command`: reap exited children (restart them or go black).
+        // 5. `theme`: reap exited children (restart them or go black).
         if child_exited {
-            state.command_exited();
+            state.theme_exited();
         }
     }
 }

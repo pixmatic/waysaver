@@ -37,7 +37,7 @@ DIR=${DIR:-$HOME/wayvoid-test}
 LOGS=$DIR/logs
 
 command -v ffmpeg >/dev/null || { echo "ffmpeg is required to generate the sample files" >&2; exit 1; }
-cargo build --release --quiet --features command || exit 1
+cargo build --release --quiet --features theme || exit 1
 W=$PWD/target/release/wayvoid
 
 # --- Sample files, generated once ---------------------------------------
@@ -79,7 +79,7 @@ results=()
 # How a theme went, according to wayvoid's log.
 verdict() {
     if ! grep -q "screen blanked" "$1"; then echo "NEVER BLANKED (input or inhibitor)"
-    elif grep -q 'command ".*": ' "$1"; then echo "FAIL: could not start"
+    elif grep -q 'theme ".*": ' "$1"; then echo "FAIL: could not start"
     elif grep -q "too soon" "$1"; then echo "FAIL: theme exited right away"
     elif grep -q "screen restored" "$1"; then echo "WOKE UP before the end (input or inhibitor)"
     elif grep -q "restarting" "$1"; then echo "ok (theme exited and was restarted)"

@@ -20,7 +20,7 @@ use super::{State, theme};
 use crate::logging::{INFO, log};
 
 /// Highest `wl_output` version we bind: v3 adds `release` (to free the
-/// object on unplug), v4 the `name` event (exported to `command` children).
+/// object on unplug), v4 the `name` event (exported to `theme` children).
 const MAX_VERSION: u32 = 4;
 
 /// A monitor advertised by the compositor.
@@ -56,8 +56,8 @@ impl Outputs {
         self.list.iter().map(|o| Some(o.wl.clone())).collect()
     }
 
-    /// The name of `target` (e.g. "HDMI-A-1"), if known. Used by `command`.
-    #[cfg_attr(not(feature = "command"), allow(dead_code))]
+    /// The name of `target` (e.g. "HDMI-A-1"), if known. Used by `theme`.
+    #[cfg_attr(not(feature = "theme"), allow(dead_code))]
     pub fn name(&self, target: Option<&WlOutput>) -> Option<String> {
         self.list
             .iter()
@@ -95,7 +95,7 @@ pub fn registry_event(
                 INFO,
                 &format!("monitor connected ({} total)", state.outputs.list.len()),
             );
-            // The command (if any) starts once the output's name is known,
+            // The theme (if any) starts once the output's name is known,
             // on its `done` event.
             if state.blanked {
                 state.cover(Some(wl), qh);
@@ -122,9 +122,9 @@ pub fn registry_event(
 }
 
 /// Output events: only the name matters (layer-shell sizes the overlays for
-/// us). On `done`, the output's information is complete: with `command`, a
-/// monitor plugged in while blanked gets its command then. (`done` also comes
-/// after mode changes; starting is a no-op if the command is already running.)
+/// us). On `done`, the output's information is complete: with `theme`, a
+/// monitor plugged in while blanked gets its theme then. (`done` also comes
+/// after mode changes; starting is a no-op if the theme is already running.)
 impl Dispatch<WlOutput, ()> for State {
     fn event(
         state: &mut Self,
