@@ -6,9 +6,24 @@
 //! - `inhibit`: D-Bus sources the compositor doesn't see (Firefox, systemd-inhibit).
 //!
 //! A single thread blocks in poll() on all sockets: 0% CPU while idle.
+//!
+//! # Module layout
+//!
+//! Optional Cargo features live in their own files. Each one has a stub
+//! (`*_off.rs`) with the same API that does nothing, picked by a
+//! `#[cfg_attr(not(feature = ...), path = ...)]` on its `mod` line. The rest of
+//! the code calls the feature's API unconditionally and has no `#[cfg]`, so:
+//! - auditing a feature means reading its files (and its stub);
+//! - auditing the core means reading code with no conditional branches.
+//!
+//! | Feature        | Files                                                |
+//! |----------------|------------------------------------------------------|
+//! | `multimonitor` | `wayland/outputs.rs`                                 |
+//! | `ignore-mouse` | `wayland/input.rs`                                   |
+//! | `command`      | `command.rs` (CLI, processes), `wayland/theme.rs`    |
 
 mod cli;
-#[cfg(feature = "command")]
+#[cfg_attr(not(feature = "command"), path = "command_off.rs")]
 mod command;
 mod inhibit;
 mod logging;
@@ -98,11 +113,10 @@ fn run(config: &cli::Config) -> Result<(), String> {
             continue;
         };
         // 3. Sleep until any fd is readable: Wayland, then the D-Bus sources,
-        //    then (with `command`) the children's pidfds. This inner block
+        //    then external processes' pidfds (`command`). This inner block
         //    exists so the fd borrows (from `guard`, `sources` and `state`) end
         //    before `guard` is consumed and `state` mutated below.
         let wl_ready;
-        #[cfg(feature = "command")]
         let child_exited;
         {
             let wl_fd = guard.connection_fd();
@@ -113,9 +127,7 @@ fn run(config: &cli::Config) -> Result<(), String> {
                 .collect();
             let mut fds = vec![PollFd::new(&wl_fd, PollFlags::IN)];
             fds.extend(bus_fds.iter().map(|fd| PollFd::new(fd, PollFlags::IN)));
-            #[cfg(feature = "command")]
             let child_fds = state.command_fds();
-            #[cfg(feature = "command")]
             fds.extend(child_fds.iter().map(|fd| PollFd::new(fd, PollFlags::IN)));
             // No timeout: we only wake up for events, never on a timer.
             match poll(&mut fds, None) {
@@ -131,10 +143,7 @@ fn run(config: &cli::Config) -> Result<(), String> {
                 .iter()
                 .map(|fd| !fd.revents().is_empty())
                 .collect();
-            #[cfg(feature = "command")]
-            {
-                child_exited = fds[bus_end..].iter().any(|fd| !fd.revents().is_empty());
-            }
+            child_exited = fds[bus_end..].iter().any(|fd| !fd.revents().is_empty());
         }
 
         // 4. Read Wayland events if there are any (dropping an unread guard
@@ -145,7 +154,6 @@ fn run(config: &cli::Config) -> Result<(), String> {
         wayland::dispatch(&mut queue, &mut state)?;
 
         // 5. `command`: reap exited children (restart them or go black).
-        #[cfg(feature = "command")]
         if child_exited {
             state.command_exited();
         }

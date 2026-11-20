@@ -8,6 +8,9 @@
 //!
 //! We wake on *release* (key up, button up, touch up), so the whole press and
 //! release pair is swallowed by the overlay and no application sees half of it.
+//!
+//! When the feature is off, `input_off.rs` replaces this file with the same
+//! API, empty.
 
 use wayland_client::{
     Connection, Dispatch, QueueHandle, WEnum,
@@ -22,21 +25,53 @@ use wayland_client::{
 use super::State;
 use crate::logging::{INFO, log};
 
-/// Input objects used only when `--ignore-mouse` is given.
-pub struct IgnoreMouse {
+// --- Command line -------------------------------------------------------------
+
+/// `--help` lines for this feature's options.
+pub const USAGE: &[&str] = &[
+    "      --ignore-mouse  don't wake up on mouse motion (keys, buttons, scroll and touch still do)",
+];
+
+/// This feature's part of the configuration.
+#[derive(Default)]
+pub struct Options {
+    /// `--ignore-mouse` was given.
     pub enabled: bool,
+}
+
+impl Options {
+    /// Handles one option before `<idle-seconds>`; `false` if not ours.
+    pub fn option(&mut self, arg: &str) -> bool {
+        let ours = arg == "--ignore-mouse";
+        self.enabled |= ours;
+        ours
+    }
+}
+
+// --- Wayland ------------------------------------------------------------------
+
+/// This feature's part of `State`: the flag and the extra input objects.
+pub struct IgnoreMouse {
+    enabled: bool,
     keyboard: Option<WlKeyboard>,
     touch: Option<WlTouch>,
 }
 
 impl IgnoreMouse {
-    pub fn new(enabled: bool) -> Self {
+    pub fn new(options: &Options) -> Self {
         Self {
-            enabled,
+            enabled: options.enabled,
             keyboard: None,
             touch: None,
         }
     }
+}
+
+/// From the `resumed` handler: whether to ignore it (the overlays decide when
+/// to wake instead). Not if no overlay is left (all closed by the compositor):
+/// then nothing could receive that input, so `resumed` must wake.
+pub fn defers_resume(state: &State) -> bool {
+    state.ignore_mouse.enabled && !state.overlays.is_empty()
 }
 
 /// From the seat handler: request a keyboard and a touch object when the seat
@@ -118,5 +153,17 @@ impl Dispatch<WlTouch, ()> for State {
         if let wl_touch::Event::Up { .. } = event {
             wake(state, "touch");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::cli::test_util::{config, run_blank};
+
+    #[test]
+    fn ignore_mouse_flag() {
+        let flag = |args: &[&str]| config(run_blank(args)).map(|c| c.ignore_mouse.enabled);
+        assert_eq!(flag(&["10"]), Some(false));
+        assert_eq!(flag(&["--ignore-mouse", "10"]), Some(true));
     }
 }

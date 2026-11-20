@@ -1,29 +1,26 @@
 //! Command-line parsing, by hand (no `clap`).
 //!
-//! Syntax: `wayvoid [OPTIONS] <idle-seconds>`. With the `command` feature it
-//! becomes `wayvoid [OPTIONS] <idle-seconds> <command...>`: everything after
-//! the seconds is the command (so wayvoid's options must come first, as with
-//! `timeout`), and `blank` means the plain black screen.
+//! Base syntax: `wayvoid [OPTIONS] <idle-seconds>`. Optional features plug in
+//! through their facades (see "Module layout" in main.rs), so this file has no
+//! `#[cfg]`:
+//! - `ignore-mouse` (`wayland::input::Options`): the `--ignore-mouse` flag.
+//! - `command` (`command::Options`): `--backdrop` and the mandatory
+//!   `<command...>` after the seconds.
 //!
-//! Optional features add their own options behind `#[cfg(feature = "...")]`:
-//! a field in `Config`, a match arm in `parse` and a `#[cfg]`'d line in
-//! `USAGE_OPTIONS`. An option whose feature is not compiled in is simply
-//! unknown, i.e. a usage error.
+//! A feature that is not compiled in has a stub with no options, so its
+//! flags are simply unknown, i.e. a usage error.
+
+use crate::{command, wayland::input};
 
 /// Settings for this run.
 pub struct Config {
     /// Idle timeout in milliseconds, as ext-idle-notify expects.
     pub timeout_ms: u32,
-    /// `--ignore-mouse`: pointer motion doesn't unblank, only keys, buttons,
-    /// scrolling and touch do.
-    #[cfg(feature = "ignore-mouse")]
-    pub ignore_mouse: bool,
-    /// Program and arguments to run while blanked; `None` for `blank`.
-    #[cfg(feature = "command")]
-    pub command: Option<Vec<String>>,
-    /// `--backdrop`: a black surface below the command's window.
-    #[cfg(feature = "command")]
-    pub backdrop: bool,
+    // Feature options: empty structs (never read) when the feature is off.
+    #[allow(dead_code)]
+    pub ignore_mouse: input::Options,
+    #[allow(dead_code)]
+    pub command: command::Options,
 }
 
 /// What the command line asks for.
@@ -35,31 +32,24 @@ pub enum Command {
     Version,
 }
 
-/// Synopsis and description of the positional arguments.
-#[cfg(not(feature = "command"))]
-const USAGE_SYNOPSIS: &str = "usage: wayvoid [OPTIONS] <idle-seconds>";
-#[cfg(feature = "command")]
-const USAGE_SYNOPSIS: &str = "usage: wayvoid [OPTIONS] <idle-seconds> <command...>
-
-<command...> runs while the screen is idle, one instance per monitor (with
-multimonitor, $WAYVOID_OUTPUT holds the monitor's name). `blank` means a
-plain black screen. Options must come before <idle-seconds>.";
-
-/// One line per option, in the order shown by `--help`.
-/// Feature-gated options append their own line.
-const USAGE_OPTIONS: &[&str] = &[
+/// Options every build has, in `--help` format.
+const BASE_OPTIONS: &[&str] = &[
     "  -h, --help          print this help and exit",
     "  -V, --version       print the version and exit",
-    #[cfg(feature = "ignore-mouse")]
-    "      --ignore-mouse  don't wake up on mouse motion (keys, buttons, scroll and touch still do)",
-    #[cfg(feature = "command")]
-    "      --backdrop      black background below the command's window (hides the desktop while it starts)",
 ];
 
-/// Full usage text, listing only the options compiled into this binary.
+/// Full usage text, listing only what is compiled into this binary.
 pub fn usage() -> String {
-    let mut text = format!("{USAGE_SYNOPSIS}\n\noptions:\n");
-    for line in USAGE_OPTIONS {
+    let mut text = format!(
+        "usage: wayvoid [OPTIONS] <idle-seconds>{}\n",
+        command::SYNOPSIS_TAIL
+    );
+    for line in command::DESCRIPTION {
+        text.push_str(line);
+        text.push('\n');
+    }
+    text.push_str("\noptions:\n");
+    for line in [BASE_OPTIONS, input::USAGE, command::USAGE].concat() {
         text.push_str(line);
         text.push('\n');
     }
@@ -68,58 +58,34 @@ pub fn usage() -> String {
 
 /// Parses `args` (without the program name). Errors are short messages meant
 /// to be printed together with the usage text.
-// `while let` instead of `for`: with `command`, the loop body consumes the
-// rest of the iterator itself.
-#[cfg_attr(not(feature = "command"), allow(clippy::while_let_on_iterator))]
 pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Command, String> {
     let mut timeout_ms = None;
-    #[cfg(feature = "ignore-mouse")]
-    let mut ignore_mouse = false;
-    #[cfg(feature = "command")]
-    let mut backdrop = false;
-    #[cfg(feature = "command")]
-    let mut command = Vec::new();
+    let mut ignore_mouse = input::Options::default();
+    let mut command = command::Options::default();
 
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
-        // `command`: after the seconds, everything (options included) belongs
-        // to the command.
-        #[cfg(feature = "command")]
-        if timeout_ms.is_some() {
-            command.push(arg);
-            command.extend(args.by_ref());
+        // With `command`, everything after the seconds (options included)
+        // belongs to the command, as with `timeout`.
+        if timeout_ms.is_some() && command::TAKES_COMMAND {
+            command.set_command(std::iter::once(arg).chain(args.by_ref()).collect());
             break;
         }
         match arg.as_str() {
             "-h" | "--help" => return Ok(Command::Help),
             "-V" | "--version" => return Ok(Command::Version),
-            #[cfg(feature = "ignore-mouse")]
-            "--ignore-mouse" => ignore_mouse = true,
-            #[cfg(feature = "command")]
-            "--backdrop" => backdrop = true,
+            _ if ignore_mouse.option(&arg) || command.option(&arg) => {}
             _ if arg.starts_with('-') => return Err(format!("unknown option: {arg}")),
             _ if timeout_ms.is_some() => return Err(format!("unexpected argument: {arg}")),
             _ => timeout_ms = Some(parse_timeout_ms(&arg)?),
         }
     }
     let timeout_ms = timeout_ms.ok_or("missing <idle-seconds>")?;
-
-    #[cfg(feature = "command")]
-    let command = match command.first().map(String::as_str) {
-        None => return Err("missing <command> (use `blank` for a black screen)".into()),
-        Some("blank") if command.len() == 1 => None,
-        Some("blank") => return Err("`blank` takes no arguments".into()),
-        Some(_) => Some(command),
-    };
-
+    command.validate()?;
     Ok(Command::Run(Config {
         timeout_ms,
-        #[cfg(feature = "ignore-mouse")]
         ignore_mouse,
-        #[cfg(feature = "command")]
         command,
-        #[cfg(feature = "command")]
-        backdrop,
     }))
 }
 
@@ -133,29 +99,36 @@ fn parse_timeout_ms(arg: &str) -> Result<u32, String> {
         .ok_or_else(|| format!("invalid <idle-seconds>: {arg} (expected 1 to 4294967)"))
 }
 
+/// Helpers shared by the tests here and in the feature modules.
 #[cfg(test)]
-mod tests {
+pub mod test_util {
     use super::*;
 
-    fn run(args: &[&str]) -> Result<Command, String> {
+    pub fn run(args: &[&str]) -> Result<Command, String> {
         parse(args.iter().map(|s| s.to_string()))
     }
 
-    /// `args` plus the mandatory `blank` command when `command` is compiled in.
-    fn run_blank(args: &[&str]) -> Result<Command, String> {
+    /// `args` plus the `blank` command when `command` requires one.
+    pub fn run_blank(args: &[&str]) -> Result<Command, String> {
         let mut args = args.to_vec();
-        if cfg!(feature = "command") {
+        if command::TAKES_COMMAND {
             args.push("blank");
         }
         run(&args)
     }
 
-    fn config(result: Result<Command, String>) -> Option<Config> {
+    pub fn config(result: Result<Command, String>) -> Option<Config> {
         match result {
             Ok(Command::Run(config)) => Some(config),
             _ => None,
         }
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Command, test_util::*};
+    use crate::command;
 
     #[test]
     fn timeout_in_milliseconds() {
@@ -172,14 +145,13 @@ mod tests {
     }
 
     #[test]
-    fn missing_arguments() {
+    fn missing_and_extra_arguments() {
         assert!(run(&[]).is_err());
-    }
-
-    #[cfg(not(feature = "command"))]
-    #[test]
-    fn extra_arguments() {
-        assert!(run(&["10", "20"]).is_err());
+        // Without `command`, nothing may follow the seconds.
+        if !command::TAKES_COMMAND {
+            assert!(run(&["10", "20"]).is_err());
+            assert!(matches!(run(&["10", "-h"]), Ok(Command::Help)));
+        }
     }
 
     #[test]
@@ -188,51 +160,5 @@ mod tests {
         assert!(matches!(run(&["-V"]), Ok(Command::Version)));
         assert!(run_blank(&["--foo", "10"]).is_err());
         assert!(run_blank(&["-5"]).is_err());
-    }
-
-    #[cfg(not(feature = "command"))]
-    #[test]
-    fn options_after_seconds() {
-        assert!(matches!(run(&["10", "-h"]), Ok(Command::Help)));
-    }
-
-    #[cfg(feature = "ignore-mouse")]
-    #[test]
-    fn ignore_mouse_flag() {
-        let flag = |args: &[&str]| config(run_blank(args)).map(|c| c.ignore_mouse);
-        assert_eq!(flag(&["10"]), Some(false));
-        assert_eq!(flag(&["--ignore-mouse", "10"]), Some(true));
-    }
-
-    #[cfg(not(feature = "ignore-mouse"))]
-    #[test]
-    fn ignore_mouse_unknown_without_feature() {
-        assert!(run_blank(&["--ignore-mouse", "10"]).is_err());
-    }
-
-    #[cfg(feature = "command")]
-    #[test]
-    fn command_argument() {
-        let cmd = |args: &[&str]| config(run(args)).map(|c| c.command);
-        assert!(run(&["10"]).is_err(), "the command is mandatory");
-        assert_eq!(cmd(&["10", "blank"]), Some(None));
-        assert!(run(&["10", "blank", "x"]).is_err());
-        // Everything after the seconds is the command, options included.
-        let mpv = ["mpv", "--fs", "-h", "blank"].map(String::from).to_vec();
-        assert_eq!(cmd(&["10", "mpv", "--fs", "-h", "blank"]), Some(Some(mpv)));
-    }
-
-    #[cfg(feature = "command")]
-    #[test]
-    fn backdrop_flag() {
-        let flag = |args: &[&str]| config(run(args)).map(|c| c.backdrop);
-        assert_eq!(flag(&["10", "blank"]), Some(false));
-        assert_eq!(flag(&["--backdrop", "10", "blank"]), Some(true));
-    }
-
-    #[cfg(not(feature = "command"))]
-    #[test]
-    fn backdrop_unknown_without_feature() {
-        assert!(run(&["--backdrop", "10"]).is_err());
     }
 }

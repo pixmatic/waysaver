@@ -9,6 +9,10 @@
 //! The command is run directly (no shell). It is responsible for showing
 //! itself fullscreen on its output, e.g. `mpv --fs --fs-screen-name=...`;
 //! to use `$WAYVOID_OUTPUT` in its arguments, wrap it in `sh -c '...'`.
+//!
+//! This file holds the feature's CLI part (`Options`) and the process side
+//! (`Runner`); the Wayland side is `wayland/theme.rs`. When the feature is
+//! off, `command_off.rs` replaces this file with the same API, empty.
 
 use std::{
     os::{
@@ -23,6 +27,74 @@ use rustix::process::{Pid, PidfdFlags, Signal};
 use wayland_client::protocol::wl_output::WlOutput;
 
 use crate::logging::{ERR, INFO, WARNING, log};
+
+/// The feature is compiled in (the stub says `false`).
+pub const ENABLED: bool = true;
+
+// --- Command line -------------------------------------------------------------
+
+/// With this feature a command must follow `<idle-seconds>`.
+pub const TAKES_COMMAND: bool = true;
+
+/// Appended to the usage synopsis.
+pub const SYNOPSIS_TAIL: &str = " <command...>";
+
+/// Explanation printed under the synopsis.
+pub const DESCRIPTION: &[&str] = &[
+    "",
+    "<command...> runs while the screen is idle, one instance per monitor (with",
+    "multimonitor, $WAYVOID_OUTPUT holds the monitor's name). `blank` means a",
+    "plain black screen. Options must come before <idle-seconds>.",
+];
+
+/// `--help` lines for this feature's options.
+pub const USAGE: &[&str] = &[
+    "      --backdrop      black background below the command's window (hides the desktop while it starts)",
+];
+
+/// This feature's part of the configuration.
+#[derive(Default)]
+pub struct Options {
+    /// Program and arguments, as given; `blank` is turned into an empty list
+    /// by `validate`.
+    argv: Vec<String>,
+    /// `--backdrop`: a black surface below the command's window.
+    pub backdrop: bool,
+}
+
+impl Options {
+    /// Handles one option before `<idle-seconds>`; `false` if not ours.
+    pub fn option(&mut self, arg: &str) -> bool {
+        let ours = arg == "--backdrop";
+        self.backdrop |= ours;
+        ours
+    }
+
+    /// Takes everything that followed `<idle-seconds>`.
+    pub fn set_command(&mut self, argv: Vec<String>) {
+        self.argv = argv;
+    }
+
+    /// Checks the command once parsing is done.
+    pub fn validate(&mut self) -> Result<(), String> {
+        match self.argv.first().map(String::as_str) {
+            None => Err("missing <command> (use `blank` for a black screen)".into()),
+            Some("blank") if self.argv.len() == 1 => {
+                self.argv.clear();
+                Ok(())
+            }
+            Some("blank") => Err("`blank` takes no arguments".into()),
+            Some(_) => Ok(()),
+        }
+    }
+
+    /// The command to run, or `None` for `blank`.
+    pub fn argv(&self) -> Option<&[String]> {
+        (!self.argv.is_empty()).then_some(self.argv.as_slice())
+    }
+}
+
+// --- Processes ----------------------------------------------------------------
 
 /// A child that exits sooner than this after starting is not restarted:
 /// it is most likely failing (bad arguments, missing file...). Measured from
@@ -55,9 +127,9 @@ pub struct Runner {
 }
 
 impl Runner {
-    pub fn new(argv: Vec<String>) -> Self {
+    pub fn new(argv: &[String]) -> Self {
         Self {
-            argv,
+            argv: argv.to_vec(),
             live: Vec::new(),
             dying: Vec::new(),
         }
@@ -130,7 +202,7 @@ impl Runner {
     }
 
     /// Sends SIGTERM to the child of `target` (its output was unplugged).
-    #[cfg(feature = "multimonitor")]
+    #[cfg_attr(not(feature = "multimonitor"), allow(dead_code))]
     pub fn stop(&mut self, target: &WlOutput) {
         while let Some(i) = self
             .live
@@ -228,6 +300,25 @@ pub fn is_own_descendant(pid: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::is_own_descendant;
+    use crate::cli::test_util::{config, run};
+
+    #[test]
+    fn command_argument() {
+        let cmd = |args: &[&str]| config(run(args)).map(|c| c.command.argv().map(<[_]>::to_vec));
+        assert!(run(&["10"]).is_err(), "the command is mandatory");
+        assert_eq!(cmd(&["10", "blank"]), Some(None));
+        assert!(run(&["10", "blank", "x"]).is_err());
+        // Everything after the seconds is the command, options included.
+        let mpv = ["mpv", "--fs", "-h", "blank"].map(String::from).to_vec();
+        assert_eq!(cmd(&["10", "mpv", "--fs", "-h", "blank"]), Some(Some(mpv)));
+    }
+
+    #[test]
+    fn backdrop_flag() {
+        let flag = |args: &[&str]| config(run(args)).map(|c| c.command.backdrop);
+        assert_eq!(flag(&["10", "blank"]), Some(false));
+        assert_eq!(flag(&["--backdrop", "10", "blank"]), Some(true));
+    }
 
     #[test]
     fn descendants() {

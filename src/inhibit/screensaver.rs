@@ -33,8 +33,8 @@ struct Inhibitor {
     /// Requested by wayvoid's own `command` (e.g. a theme using SDL, which
     /// inhibits by default). Kept so the caller gets a normal reply and can
     /// release it, but never counted: otherwise starting the theme would
-    /// unblank the screen and stop the theme, in a loop.
-    #[cfg(feature = "command")]
+    /// unblank the screen and stop the theme, in a loop. Always `false`
+    /// without the `command` feature.
     ours: bool,
 }
 
@@ -84,25 +84,19 @@ impl ScreenSaver {
                     // The bus always sets the sender; the default is only
                     // there to avoid an unwrap.
                     let owner = msg.sender().map(|s| s.to_string()).unwrap_or_default();
-                    #[cfg(feature = "command")]
                     let ours = self.is_own_command(&owner);
-                    #[cfg(feature = "command")]
                     if ours {
                         log(
                             INFO,
                             &format!("ignoring inhibitor from our own command ({app})"),
                         );
-                    }
-                    #[cfg(not(feature = "command"))]
-                    let ours = false;
-                    if !ours {
+                    } else {
                         log(INFO, &format!("inhibited by {app}: {reason}"));
                     }
                     self.inhibitors.push(Inhibitor {
                         cookie,
                         owner,
                         app: app.to_string(),
-                        #[cfg(feature = "command")]
                         ours,
                     });
                     msg.method_return().append1(cookie)
@@ -142,7 +136,7 @@ impl ScreenSaver {
     fn remove(&mut self, matches: impl Fn(&Inhibitor) -> bool) {
         self.inhibitors.retain(|i| {
             let keep = !matches(i);
-            if !keep && !i.is_ours() {
+            if !keep && !i.ours {
                 log(INFO, &format!("released by {}", i.app));
             }
             keep
@@ -151,24 +145,18 @@ impl ScreenSaver {
 
     /// Whether the bus client `owner` is a process started by wayvoid (its
     /// `command`, or anything that spawned). Asks the bus daemon for the
-    /// client's PID; a blocking call, but only made once per `Inhibit`.
-    #[cfg(feature = "command")]
+    /// client's PID; a blocking call, but only made once per `Inhibit`, and
+    /// skipped entirely without the `command` feature.
     fn is_own_command(&self, owner: &str) -> bool {
+        if !crate::command::ENABLED {
+            return false;
+        }
         bus::call_daemon(&self.channel, "GetConnectionUnixProcessID", |m| {
             m.append1(owner)
         })
         .ok()
         .and_then(|reply| reply.read1::<u32>().ok())
         .is_some_and(crate::command::is_own_descendant)
-    }
-}
-
-impl Inhibitor {
-    fn is_ours(&self) -> bool {
-        #[cfg(feature = "command")]
-        return self.ours;
-        #[cfg(not(feature = "command"))]
-        false
     }
 }
 
@@ -182,7 +170,7 @@ impl InhibitSource for ScreenSaver {
     }
 
     fn is_inhibited(&self) -> bool {
-        self.inhibitors.iter().any(|i| !i.is_ours())
+        self.inhibitors.iter().any(|i| !i.ours)
     }
 
     /// Answers method calls and tracks clients leaving the bus.
