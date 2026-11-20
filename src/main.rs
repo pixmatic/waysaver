@@ -3,10 +3,14 @@
 //! After N seconds of inactivity it covers the screen with a black
 //! layer-shell surface, and removes it as soon as activity resumes.
 //! The compositor tracks idle time and Wayland inhibitors (ext-idle-notify-v1).
-//! Apps that inhibit through D-Bus instead (e.g. Firefox) are served by the
-//! `org.freedesktop.ScreenSaver` service in `screensaver.rs`.
-//! A single thread blocks in poll() on both sockets: 0% CPU while idle.
+//! Inhibitors the compositor doesn't see come from D-Bus sources:
+//! - `screensaver.rs`: the `org.freedesktop.ScreenSaver` service (Firefox...).
+//! - `logind.rs`: logind `idle` locks (`systemd-inhibit`).
+//!
+//! A single thread blocks in poll() on all sockets: 0% CPU while idle.
 
+mod bus;
+mod logind;
 mod screensaver;
 
 use std::{
@@ -17,6 +21,8 @@ use std::{
     sync::OnceLock,
 };
 
+use bus::InhibitSource;
+use logind::Logind;
 use rustix::event::{PollFd, PollFlags, poll};
 use screensaver::ScreenSaver;
 
@@ -243,33 +249,45 @@ fn run(timeout_ms: u32) -> Result<(), String> {
         overlay: None,
     };
 
-    // Optional: without a session bus (or if the name is taken) we keep
-    // working with Wayland inhibitors only.
-    let mut screensaver = ScreenSaver::new()
-        .inspect_err(|e| screensaver::warn_unavailable(e))
-        .ok();
+    // Each D-Bus source is optional: if it can't start we log a warning
+    // and keep working with the rest (and with Wayland inhibitors).
+    let mut sources: Vec<Box<dyn InhibitSource>> = Vec::new();
+    match ScreenSaver::new() {
+        Ok(src) => sources.push(Box::new(src)),
+        Err(e) => warn_disabled("org.freedesktop.ScreenSaver", &e),
+    }
+    match Logind::new() {
+        Ok(src) => sources.push(Box::new(src)),
+        Err(e) => warn_disabled("logind", &e),
+    }
 
-    state.set_inhibited(false, &qh);
+    state.set_inhibited(sources.iter().any(|s| s.is_inhibited()), &qh);
     log(
         INFO,
         &format!("started, idle timeout {}s", timeout_ms / 1000),
     );
 
-    // Messages may already be buffered from the startup calls.
-    let mut bus_ready = true;
+    // Which sources have data to read. All start "ready" because messages
+    // may already be buffered from the startup calls.
+    let mut ready = vec![true; sources.len()];
     loop {
-        if bus_ready && let Some(ss) = &mut screensaver {
-            match ss.dispatch() {
-                Ok(()) => state.set_inhibited(ss.is_inhibited(), &qh),
-                Err(e) => {
-                    screensaver::warn_unavailable(&e);
-                    screensaver = None;
-                    state.set_inhibited(false, &qh);
-                }
-            }
+        if ready.contains(&true) {
+            // Dispatch the ready sources, dropping any whose bus was lost.
+            let mut i = 0;
+            sources.retain_mut(|src| {
+                let keep = !ready[i]
+                    || src
+                        .dispatch()
+                        .inspect_err(|e| warn_disabled(src.name(), e))
+                        .is_ok();
+                i += 1;
+                keep
+            });
+            ready.clear();
+            state.set_inhibited(sources.iter().any(|s| s.is_inhibited()), &qh);
         }
 
-        // Send our requests, then block until either socket has data.
+        // Send our requests, then block until any socket has data.
         queue.flush().map_err(|e| format!("flush: {e}"))?;
         // `prepare_read` returns None if events are already queued.
         let Some(guard) = queue.prepare_read() else {
@@ -279,14 +297,13 @@ fn run(timeout_ms: u32) -> Result<(), String> {
         let wl_ready;
         {
             let wl_fd = guard.connection_fd();
-            // SAFETY: the fd belongs to `screensaver`'s channel, which outlives this block.
-            let bus_fd = screensaver
-                .as_ref()
-                .map(|ss| unsafe { BorrowedFd::borrow_raw(ss.fd()) });
+            // SAFETY: each fd belongs to a source's channel, which outlives this block.
+            let bus_fds: Vec<_> = sources
+                .iter()
+                .map(|src| unsafe { BorrowedFd::borrow_raw(src.fd()) })
+                .collect();
             let mut fds = vec![PollFd::new(&wl_fd, PollFlags::IN)];
-            if let Some(fd) = &bus_fd {
-                fds.push(PollFd::new(fd, PollFlags::IN));
-            }
+            fds.extend(bus_fds.iter().map(|fd| PollFd::new(fd, PollFlags::IN)));
             match poll(&mut fds, None) {
                 Ok(_) => {}
                 Err(rustix::io::Errno::INTR) => continue,
@@ -294,7 +311,7 @@ fn run(timeout_ms: u32) -> Result<(), String> {
             }
             // Any revents (IN, HUP, ERR) means "go read": errors surface there.
             wl_ready = !fds[0].revents().is_empty();
-            bus_ready = fds.get(1).is_some_and(|fd| !fd.revents().is_empty());
+            ready = fds[1..].iter().map(|fd| !fd.revents().is_empty()).collect();
         }
 
         if wl_ready {
@@ -307,6 +324,11 @@ fn run(timeout_ms: u32) -> Result<(), String> {
         // (Dropping an unused guard cancels the read.)
         dispatch(&mut queue, &mut state)?;
     }
+}
+
+/// Logged when a D-Bus inhibitor source can't start or loses its bus.
+fn warn_disabled(source: &str, reason: &str) {
+    log(WARNING, &format!("{source} inhibitors disabled: {reason}"));
 }
 
 /// Runs the handlers for all Wayland events read so far.
