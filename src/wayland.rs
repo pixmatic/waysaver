@@ -3,6 +3,13 @@
 //! The compositor tracks idle time and Wayland inhibitors (ext-idle-notify-v1).
 //! On `idled` we map a layer-shell overlay showing a 1x1 black pixel stretched
 //! with wp_viewporter; on `resumed` we destroy it.
+//!
+//! Without the `multimonitor` feature there is a single overlay with no
+//! output set (the compositor picks one). With it, `outputs` tracks every
+//! `wl_output` and each one gets its own overlay.
+
+#[cfg(feature = "multimonitor")]
+mod outputs;
 
 use std::{
     fs::File,
@@ -14,18 +21,21 @@ use wayland_client::{
     Connection, Dispatch, EventQueue, Proxy, QueueHandle, WEnum,
     backend::WaylandError,
     delegate_noop,
-    globals::{GlobalList, GlobalListContents, registry_queue_init},
+    globals::{GlobalList, registry_queue_init},
     protocol::{
         wl_buffer::WlBuffer,
         wl_compositor::WlCompositor,
+        wl_output::WlOutput,
         wl_pointer::{self, WlPointer},
-        wl_registry::WlRegistry,
         wl_seat::{self, WlSeat},
         wl_shm::{self, WlShm},
         wl_shm_pool::WlShmPool,
         wl_surface::WlSurface,
     },
 };
+// Only for the static registry handler; `multimonitor` has its own.
+#[cfg(not(feature = "multimonitor"))]
+use wayland_client::{globals::GlobalListContents, protocol::wl_registry::WlRegistry};
 use wayland_protocols::{
     ext::idle_notify::v1::client::{
         ext_idle_notification_v1::{self, ExtIdleNotificationV1},
@@ -40,8 +50,11 @@ use wayland_protocols_wlr::layer_shell::v1::client::{
 
 use crate::logging::{INFO, WARNING, log};
 
-/// The black overlay currently on screen, if any.
+/// A black overlay covering one output.
 struct Overlay {
+    /// The output it covers, to find the overlay when that output is unplugged.
+    #[cfg(feature = "multimonitor")]
+    output: Option<WlOutput>,
     surface: WlSurface,
     viewport: WpViewport,
     layer: ZwlrLayerSurfaceV1,
@@ -57,7 +70,7 @@ impl Overlay {
     }
 }
 
-/// Global objects needed at runtime plus the current overlay.
+/// Global objects needed at runtime plus the current overlays.
 /// Passed as `&mut` to every event handler (`Dispatch` impls below).
 pub struct State {
     // Idle detection.
@@ -77,8 +90,14 @@ pub struct State {
     /// Obtained once the seat advertises pointer capability; used only to
     /// hide the cursor over the overlay.
     pointer: Option<WlPointer>,
-    /// `Some` while the screen is blanked (or about to be, pending configure).
-    overlay: Option<Overlay>,
+    /// True between `idled` and `resumed` (or an inhibitor arriving).
+    blanked: bool,
+    /// One per covered output while blanked; empty otherwise. May also be
+    /// empty while blanked if the compositor closed them all.
+    overlays: Vec<Overlay>,
+    /// Every advertised output, with its registry name (for hotplug removal).
+    #[cfg(feature = "multimonitor")]
+    outputs: Vec<(u32, WlOutput)>,
 }
 
 /// Connects to the compositor and binds every required global.
@@ -103,7 +122,10 @@ pub fn connect(timeout_ms: u32) -> Result<(EventQueue<State>, State), String> {
         layer_shell: bind(&globals, &qh, 1..=4)?,
         buffer: black_buffer(&shm, &qh)?,
         pointer: None,
-        overlay: None,
+        blanked: false,
+        overlays: Vec::new(),
+        #[cfg(feature = "multimonitor")]
+        outputs: outputs::bind_all(&globals, &qh),
     };
     Ok((queue, state))
 }
@@ -150,20 +172,45 @@ impl State {
         }
     }
 
-    /// Creates the overlay. Nothing is drawn yet: the compositor first replies
-    /// with a `configure` (handled below), and only then is the buffer attached.
+    /// Blanks the screen: one overlay per target output.
     fn show(&mut self, qh: &QueueHandle<Self>) {
-        if self.overlay.is_some() {
+        if self.blanked {
             return;
         }
+        self.blanked = true;
+        for output in self.targets() {
+            self.add_overlay(output, qh);
+        }
+    }
+
+    /// Unblanks: destroys every overlay.
+    fn hide(&mut self) {
+        self.blanked = false;
+        for overlay in self.overlays.drain(..) {
+            overlay.destroy();
+        }
+    }
+
+    /// The outputs to cover: all known ones with `multimonitor`, otherwise a
+    /// single `None` ("whichever output the compositor picks").
+    fn targets(&self) -> Vec<Option<WlOutput>> {
+        #[cfg(feature = "multimonitor")]
+        return self.outputs.iter().map(|(_, o)| Some(o.clone())).collect();
+        #[cfg(not(feature = "multimonitor"))]
+        vec![None]
+    }
+
+    /// Creates an overlay on `output`. Nothing is drawn yet: the compositor
+    /// first replies with a `configure` (handled below), and only then is the
+    /// buffer attached.
+    fn add_overlay(&mut self, output: Option<WlOutput>, qh: &QueueHandle<Self>) {
         let surface = self.compositor.create_surface(qh, ());
         let viewport = self.viewporter.get_viewport(&surface, qh, ());
-        // `None` output: the compositor picks the current monitor. The overlay
-        // layer is stacked above everything, fullscreen windows included.
-        // "wayvoid" is the namespace compositors may use in window rules.
+        // The overlay layer is stacked above everything, fullscreen windows
+        // included. "wayvoid" is the namespace compositors may use in rules.
         let layer = self.layer_shell.get_layer_surface(
             &surface,
-            None,
+            output.as_ref(),
             Layer::Overlay,
             "wayvoid".into(),
             qh,
@@ -174,20 +221,28 @@ impl State {
         // -1: cover panels and bars instead of being pushed by them.
         layer.set_exclusive_zone(-1);
         // Grab the keyboard so the waking keypress reaches no application.
+        // With several overlays the compositor focuses one of them.
         layer.set_keyboard_interactivity(KeyboardInteractivity::Exclusive);
         // Initial commit without a buffer asks the compositor to configure us.
         surface.commit();
-        self.overlay = Some(Overlay {
+        self.overlays.push(Overlay {
+            #[cfg(feature = "multimonitor")]
+            output,
             surface,
             viewport,
             layer,
         });
     }
 
-    /// Removes the overlay, if present.
-    fn hide(&mut self) {
-        if let Some(overlay) = self.overlay.take() {
-            overlay.destroy();
+    /// Destroys the overlays matching `pred` (blanked state is unchanged).
+    fn remove_overlays(&mut self, pred: impl Fn(&Overlay) -> bool) {
+        let mut i = 0;
+        while i < self.overlays.len() {
+            if pred(&self.overlays[i]) {
+                self.overlays.swap_remove(i).destroy();
+            } else {
+                i += 1;
+            }
         }
     }
 }
@@ -263,8 +318,8 @@ impl Dispatch<ZwlrLayerSurfaceV1, ()> for State {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        // Ignore events from a previous, already destroyed overlay.
-        let Some(overlay) = state.overlay.as_ref().filter(|o| o.layer == *layer) else {
+        // Ignore events from an already destroyed overlay.
+        let Some(overlay) = state.overlays.iter().find(|o| o.layer == *layer) else {
             return;
         };
         match event {
@@ -282,11 +337,12 @@ impl Dispatch<ZwlrLayerSurfaceV1, ()> for State {
                 overlay.surface.attach(Some(&state.buffer), 0, 0);
                 overlay.surface.commit();
             }
-            // The compositor dropped our surface (e.g. output gone). We stay
-            // "idle" without an overlay; the next resume/idle cycle blanks again.
+            // The compositor dropped this surface (e.g. its output is gone).
+            // Only this overlay goes; we stay blanked, and the next
+            // resume/idle cycle recreates whatever is missing.
             zwlr_layer_surface_v1::Event::Closed => {
                 log(WARNING, "overlay closed by the compositor");
-                state.hide();
+                state.remove_overlays(|o| o.layer == *layer);
             }
             _ => {}
         }
@@ -315,7 +371,7 @@ impl Dispatch<WlSeat, ()> for State {
     }
 }
 
-/// Hide the cursor whenever it enters our (only) surface. `enter` is only sent
+/// Hide the cursor whenever it enters one of our surfaces. `enter` is only sent
 /// for our own surfaces, and a `None` cursor surface means "no cursor"; other
 /// clients' cursors are unaffected.
 impl Dispatch<WlPointer, ()> for State {
@@ -335,6 +391,8 @@ impl Dispatch<WlPointer, ()> for State {
 
 /// The registry is handled by `registry_queue_init`. Globals added or removed
 /// later (hotplug) are ignored: we bind everything once at startup.
+/// (`multimonitor` replaces this with its own handler, in `outputs.rs`.)
+#[cfg(not(feature = "multimonitor"))]
 impl Dispatch<WlRegistry, GlobalListContents> for State {
     fn event(
         _: &mut Self,

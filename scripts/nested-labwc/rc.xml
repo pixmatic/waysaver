@@ -1,0 +1,9 @@
+<?xml version="1.0"?>
+<!-- Config for the nested labwc started by scripts/nested.sh. -->
+<labwc_config>
+  <keyboard>
+    <!-- F1: add a virtual (headless, invisible) monitor; F2: remove one. -->
+    <keybind key="F1"><action name="VirtualOutputAdd" /></keybind>
+    <keybind key="F2"><action name="VirtualOutputRemove" /></keybind>
+  </keyboard>
+</labwc_config>

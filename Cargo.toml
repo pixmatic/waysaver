@@ -14,3 +14,6 @@ wayland-protocols-wlr = { version = "0.3.12", features = ["client"] }
 # independent and any combination must build (see scripts/check.sh).
 [features]
 default = []
+# One overlay per monitor, following hotplug (default: a single overlay on
+# the monitor the compositor picks).
+multimonitor = []
