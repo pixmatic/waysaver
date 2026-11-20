@@ -12,12 +12,11 @@ use dbus::{
     channel::{BusType, Channel},
 };
 
-use crate::{
-    INFO,
-    bus::{self, InhibitSource},
-    log,
-};
+use super::{InhibitSource, bus};
+use crate::logging::{INFO, log};
 
+/// Source name used in log messages.
+pub const NAME: &str = "logind";
 const LOGIND: &str = "org.freedesktop.login1";
 const PATH: &str = "/org/freedesktop/login1";
 const MANAGER: &str = "org.freedesktop.login1.Manager";
@@ -34,6 +33,8 @@ impl Logind {
     pub fn new() -> Result<Self, String> {
         let channel = bus::connect(BusType::System)?;
 
+        // Only Manager property changes: `arg0` filters on the signal's first
+        // argument, the interface whose properties changed.
         let rule = format!(
             "type='signal',sender='{LOGIND}',path='{PATH}',\
              interface='{PROPERTIES}',member='PropertiesChanged',arg0='{MANAGER}'"
@@ -55,7 +56,8 @@ impl Logind {
         Ok(logind)
     }
 
-    /// Updates the state from a `BlockInhibited` value ("a:b:c"), logging changes.
+    /// Updates the state from a `BlockInhibited` value, a colon-separated list
+    /// such as "idle:sleep:handle-lid-switch". Logs only actual changes.
     fn update(&mut self, blocked: &str) {
         let idle = blocked.split(':').any(|op| op == "idle");
         if idle != self.idle_blocked {
@@ -74,7 +76,7 @@ impl Logind {
 
 impl InhibitSource for Logind {
     fn name(&self) -> &'static str {
-        "logind"
+        NAME
     }
 
     fn fd(&self) -> RawFd {
@@ -97,7 +99,9 @@ impl InhibitSource for Logind {
 }
 
 /// Extracts the new `BlockInhibited` value from a `PropertiesChanged` signal.
-/// logind sends the value itself (emits-change), not just an invalidation.
+/// logind sends the value itself (emits-change), not just an invalidation, so
+/// the third argument (invalidated properties) is not read. Signals that don't
+/// touch `BlockInhibited` return `None`.
 fn block_inhibited(msg: &Message) -> Option<String> {
     if msg.member().as_deref() != Some("PropertiesChanged") {
         return None;

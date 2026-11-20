@@ -2,7 +2,11 @@
 //!
 //! Some applications (notably Firefox) don't use Wayland idle inhibitors and
 //! instead call `Inhibit`/`UnInhibit` on this well-known D-Bus name. We own the
-//! name, track the active inhibitors and let `main` know whether any remain.
+//! name, track the active inhibitors and report whether any remain.
+//!
+//! Only `Inhibit` and `UnInhibit` are implemented; the object path is ignored
+//! because clients disagree on it (`/ScreenSaver` vs `/org/freedesktop/ScreenSaver`).
+//! Unsupported methods (including introspection) get an error reply.
 
 use std::os::fd::RawFd;
 
@@ -12,13 +16,13 @@ use dbus::{
     strings::ErrorName,
 };
 
-use crate::{
-    INFO,
-    bus::{self, DBUS, InhibitSource},
-    log,
+use super::{
+    InhibitSource,
+    bus::{self, DBUS},
 };
+use crate::logging::{INFO, log};
 
-const SERVICE: &str = "org.freedesktop.ScreenSaver";
+pub const SERVICE: &str = "org.freedesktop.ScreenSaver";
 
 /// An active inhibition request.
 struct Inhibitor {
@@ -31,6 +35,7 @@ struct Inhibitor {
 pub struct ScreenSaver {
     channel: Channel,
     inhibitors: Vec<Inhibitor>,
+    /// Next cookie to hand out; never 0 (some clients treat 0 as failure).
     next_cookie: u32,
 }
 
@@ -47,7 +52,8 @@ impl ScreenSaver {
             return Err(format!("{SERVICE} is already owned by another program"));
         }
 
-        // Be told when bus clients disconnect, to drop their inhibitors.
+        // Be told when bus clients disconnect, to drop their inhibitors. This
+        // also reports unrelated name changes on the bus; we filter them out.
         let rule = format!("type='signal',sender='{DBUS}',member='NameOwnerChanged'");
         bus::call_daemon(&channel, "AddMatch", |m| m.append1(rule.as_str()))?;
 
@@ -67,10 +73,13 @@ impl ScreenSaver {
             (Some(SERVICE), Some("Inhibit")) => match msg.read2::<&str, &str>() {
                 Ok((app, reason)) => {
                     let cookie = self.next_cookie;
+                    // Wrap around skipping 0.
                     self.next_cookie = self.next_cookie.wrapping_add(1).max(1);
                     log(INFO, &format!("inhibited by {app}: {reason}"));
                     self.inhibitors.push(Inhibitor {
                         cookie,
+                        // The bus always sets the sender; the default is
+                        // only there to avoid an unwrap.
                         owner: msg.sender().map(|s| s.to_string()).unwrap_or_default(),
                         app: app.to_string(),
                     });
@@ -79,6 +88,7 @@ impl ScreenSaver {
                 Err(_) => error(msg, "InvalidArgs", c"expected (app, reason)"),
             },
             (Some(SERVICE), Some("UnInhibit")) => match msg.read1::<u32>() {
+                // Unknown cookies are accepted silently (already released).
                 Ok(cookie) => {
                     self.remove(|i| i.cookie == cookie);
                     msg.method_return()
@@ -87,6 +97,7 @@ impl ScreenSaver {
             },
             _ => error(msg, "UnknownMethod", c"method not supported by wayvoid"),
         };
+        // Callers may flag that they don't want a reply.
         if !msg.get_no_reply() {
             // Only fails if the connection is gone; dispatch() reports that.
             let _ = self.channel.send(reply);
@@ -94,7 +105,8 @@ impl ScreenSaver {
     }
 
     /// `NameOwnerChanged(name, old, new)` with empty `new` means `name` left
-    /// the bus: forget its inhibitors (e.g. the browser crashed).
+    /// the bus: forget its inhibitors (e.g. the browser crashed). Inhibitors
+    /// store unique names (":1.42"), so well-known names never match.
     fn handle_signal(&mut self, msg: &Message) {
         if msg.member().as_deref() != Some("NameOwnerChanged") {
             return;
@@ -138,6 +150,7 @@ impl InhibitSource for ScreenSaver {
                 _ => {}
             }
         }
+        // Send the replies queued by `handle_call` right away.
         self.channel.flush();
         Ok(())
     }
