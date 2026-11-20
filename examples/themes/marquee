@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+THEME_NAME="Bouncing text"
+THEME_DESCRIPTION="Your text in a big terminal font, bouncing around the screen and changing color."
+THEME_VERSION="1.1"
+THEME_REQUIRES="foot figlet"
+THEME_USAGE="marquee [--font NAME] [--color COLOR] [--background RRGGBB] [--speed N] [--transparent] [TEXT...]"
+
+# Options:
+#   --font NAME     a figlet font (see /usr/share/figlet/fonts); default "big"
+#   --color COLOR   red, green, yellow, blue, magenta, cyan or white; default
+#                   "cycle": a new color at every bounce
+#   --background RRGGBB
+#                   background color; default 000000 (black)
+#   --speed N       steps per second, 1-60; default 12
+#   --transparent   over the live desktop instead of a background
+#   TEXT            default: "wayvoid"
+#
+# Example: wayvoid 300 marquee --font slant --color cyan --background 101828 "Back in 5 minutes"
+
+for dep in $THEME_REQUIRES; do
+    command -v "$dep" >/dev/null || { echo "$0: $dep is not installed" >&2; exit 1; }
+done
+
+fail() { echo "$0: $*" >&2; exit 2; }
+
+args=("$@")
+font=big color=cycle background=000000 speed=12 transparent=
+while (($#)); do
+    case $1 in
+        --font) font=${2:-}; shift 2 || fail "--font needs a value" ;;
+        --color) color=${2:-}; shift 2 || fail "--color needs a value" ;;
+        --background) background=${2:-}; shift 2 || fail "--background needs a value" ;;
+        --speed) speed=${2:-}; shift 2 || fail "--speed needs a value" ;;
+        --transparent) transparent=1; shift ;;
+        --) shift; break ;;
+        -*) fail "unknown option: $1" ;;
+        *) break ;;
+    esac
+done
+text=${*:-wayvoid}
+
+# Checked before opening the terminal, so errors reach wayvoid's log.
+figlet -f "$font" x >/dev/null 2>&1 || fail "unknown font: $font"
+[[ $speed =~ ^[0-9]+$ ]] && ((speed >= 1 && speed <= 60)) || fail "--speed must be 1-60"
+declare -A codes=([red]=31 [green]=32 [yellow]=33 [blue]=34 [magenta]=35 [cyan]=36 [white]=37)
+[[ $color == cycle || -n ${codes[$color]:-} ]] || fail "unknown color: $color"
+[[ $background =~ ^[0-9a-fA-F]{6}$ ]] || fail "--background must be RRGGBB, e.g. 101828"
+
+# Started by wayvoid: open a terminal that runs this same script. The short
+# sleep lets it become fullscreen first, so the size we read is the final one.
+if [[ -z ${MARQUEE_IN_TERMINAL:-} ]]; then
+    export MARQUEE_IN_TERMINAL=1
+    if [[ -n $transparent ]]; then
+        # Maximized: at least on labwc, a fullscreen window is drawn opaque.
+        term=(foot -o csd.preferred=none -o colors-dark.alpha=0.0 -o colors-dark.alpha-mode=all --maximized)
+    else
+        term=(foot -o colors-dark.background="$background" --fullscreen)
+    fi
+    exec "${term[@]}" bash -c 'sleep 0.3; exec "$0" "$@"' "$0" "${args[@]}"
+fi
+
+# --- Animation ----------------------------------------------------------------
+
+mapfile -t art < <(figlet -w 10000 -f "$font" -- "$text")
+while ((${#art[@]})) && [[ -z ${art[-1]// /} ]]; do unset 'art[-1]'; done
+w=0
+for line in "${art[@]}"; do ((${#line} > w)) && w=${#line}; done
+h=${#art[@]}
+
+# Switches to a random color, different from the current one.
+pick_color() {
+    local next=$c
+    while ((next == c)); do next=$((31 + RANDOM % 7)); done
+    c=$next
+}
+c=0
+if [[ $color == cycle ]]; then pick_color; else c=${codes[$color]}; fi
+
+# $COLUMNS and $LINES follow the terminal size (updated after each `sleep`).
+shopt -s checkwinsize
+COLUMNS=$(tput cols) LINES=$(tput lines)
+x=$((RANDOM % (COLUMNS > w ? COLUMNS - w : 1)))
+y=$((RANDOM % (LINES > h ? LINES - h : 1)))
+dx=2 dy=1 # terminal cells are about twice as tall as wide
+delay=$(printf '0.%03d' $((1000 / speed)))
+((speed == 1)) && delay=1
+
+printf '\e[?25l'
+trap 'printf "\e[0m\e[?25h"' EXIT
+while :; do
+    # Draw the whole frame at once (synchronized update: no flicker).
+    frame=$'\e[?2026h\e[0m\e[2J\e[1;'"${c}m"
+    for i in "${!art[@]}"; do
+        frame+=$'\e['"$((y + i + 1));$((x + 1))H${art[i]}"
+    done
+    printf '%s\e[?2026l' "$frame"
+    sleep "$delay"
+
+    maxx=$((COLUMNS > w ? COLUMNS - w : 0))
+    maxy=$((LINES > h ? LINES - h : 0))
+    bounced=
+    ((x + dx < 0 || x + dx > maxx)) && dx=$((-dx)) bounced=1
+    ((y + dy < 0 || y + dy > maxy)) && dy=$((-dy)) bounced=1
+    x=$((x + dx)) y=$((y + dy))
+    ((x < 0)) && x=0
+    ((x > maxx)) && x=$maxx
+    ((y < 0)) && y=0
+    ((y > maxy)) && y=$maxy
+    [[ -n $bounced && $color == cycle ]] && pick_color
+done

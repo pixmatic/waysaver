@@ -45,7 +45,7 @@ wayvoid [OPTIONS] <idle-seconds> <theme...>        # with it
 ```
 
 - `<idle-seconds>`: inactivity time before blanking (1 to 4294967).
-- `<theme...>` (feature `theme`): the program to run while idle. A bare name is looked up first in `~/.config/wayvoid/themes/` (`$XDG_CONFIG_HOME/wayvoid/themes/`), then in `PATH`. Everything after the seconds is the theme, so wayvoid's own options go **before** the seconds. `blank` means the plain black screen.
+- `<theme...>` (feature `theme`): what to show while idle. `blank` is the plain black screen; anything else is a program and its arguments: either a theme from your [themes directory](#installing-the-example-themes) or [any command](#running-a-program-directly). Everything after the seconds belongs to the theme, so wayvoid's own options go **before** the seconds.
 
 Options (only those compiled in are accepted and shown by `--help`):
 
@@ -58,125 +58,123 @@ Options (only those compiled in are accepted and shown by `--help`):
 
 Whatever wakes the screen up (a key, a click) is swallowed: it never reaches the application underneath.
 
-## Examples
+## Themes
+
+A theme is what wayvoid shows instead of black. It is just a program: wayvoid runs it while the screen is idle and stops it on wake.
+
+### Installing the example themes
+
+This repository ships ready-made themes in [`examples/themes/`](examples/themes). Copy them to your themes directory, `~/.config/wayvoid/themes/` (`$XDG_CONFIG_HOME/wayvoid/themes/`), and call them by name:
+
+```sh
+mkdir -p ~/.config/wayvoid/themes
+cp examples/themes/* ~/.config/wayvoid/themes/
+
+wayvoid 300 matrix
+```
+
+A bare name is looked up in the themes directory first, then in `PATH`.
+
+| Theme | Shows | Options | Needs |
+|---|---|---|---|
+| `matrix` | The Matrix rain | `--color`, `--background` | foot, cmatrix |
+| `matrix-live` | The Matrix rain over the live desktop | `--color` | foot, cmatrix |
+| `marquee` | Your text in a big font, bouncing and changing color | `--font`, `--color`, `--background`, `--speed`, `--transparent`, text | foot, figlet |
+| `clock` | A big clock, bouncing or still | `--still`, `--color`, `--background` | foot, tty-clock |
+| `jumpclock` | A big clock jumping to a random spot | `--font`, `--color`, `--background`, seconds | foot, figlet |
+| `aquarium` | An ASCII aquarium | `--background` | foot, asciiquarium |
+| `pipes` | Pipes crawling across the screen, in 2D | `--count`, `--color`, `--background` | foot, pipes.sh |
+| `bonsai` | A bonsai tree growing | `--message`, `--background` | foot, cbonsai |
+| `mandelbrot` | An endless zoom into the Mandelbrot set | | ffplay |
+| `life` | Conway's Game of Life | `--color`, `--background` | ffplay |
+| `text3d` | Your text with depth, spinning in 3D | `--font`, `--color`, `--background`, `--speed`, text | a browser¹ |
+| `maze3d` | A walk through a random 3D maze | `--size`, `--speed`, `--color` | a browser¹ |
+| `pipes3d` | 3D pipes growing until they fill the screen | `--speed`, `--pipes`, `--size`, `--background` | python, pygame |
+| `shader` | A GLSL fragment shader (a plasma one by default) | file | glslViewer |
+| `shadertoy` | A shader from shadertoy.com (needs Internet) | shader id | a browser¹ |
+| `video` | Videos, GIFs or images (a slideshow), shuffled | `--image-time`, files or folders | mpv |
+| `web` | Any web page, e.g. your own HTML5 screensaver | `--browser`, URL | a browser¹ |
+| `blur` | A blurred, frozen snapshot of the screen² | `--dim`, percentage | grim, ffmpeg, mpv |
+
+¹ Chrome, Chromium or Firefox. The 3D pages are plain HTML and JavaScript, with no libraries and no network access.
+² On Wayland only the compositor sees other windows, so a *live* blur is impossible. `blur` takes a snapshot with `grim`, which needs the wlr-screencopy protocol (labwc, Sway, Hyprland, river, niri...; not KDE).
+
+### Customizing a theme
+
+Everything after the theme's name is passed to it, so each theme takes its own options. Its first lines list them, with an example. Colors are names (`red`, `cyan`...) for terminal themes, `RRGGBB` for backgrounds, and any CSS color in browser themes.
+
+```sh
+wayvoid 300 matrix --color cyan --background 001018
+wayvoid 300 clock --still --color yellow --background 1a1a2e
+wayvoid 300 marquee --font slant --color cyan --background 101828 "Back in 5 minutes"
+wayvoid 300 bonsai --message "Out for lunch"
+wayvoid 300 life --color ff8800 --background 100800
+wayvoid 300 text3d --font "DejaVu Serif" --color gold --background "#102030" Hello
+wayvoid 300 maze3d --size 20 --speed 0.7 --color 30
+wayvoid 300 pipes3d --speed 30 --pipes 20
+wayvoid 300 video --image-time 30 ~/Pictures/wallpapers ~/Videos/nature
+wayvoid 300 blur --dim 40 70
+```
+
+Mistakes, such as an unknown color, are reported in wayvoid's log (see [Logs](#logs)) and that screen stays black.
+
+### Writing a theme
+
+The example themes are short scripts (shell, plus one in Python): copy one and edit it to make your own. Any executable works, but they follow a convention that makes them self-describing:
+
+```sh
+#!/bin/sh
+THEME_NAME="Aquarium"
+THEME_DESCRIPTION="An ASCII-art aquarium."
+THEME_VERSION="1.1"
+THEME_REQUIRES="foot asciiquarium"
+THEME_USAGE="aquarium [--background RRGGBB]"
+
+for dep in $THEME_REQUIRES; do
+    command -v "$dep" >/dev/null || { echo "$0: $dep is not installed" >&2; exit 1; }
+done
+
+# ... read and check the options ...
+
+exec foot -o colors-dark.background="$background" --fullscreen sh -c 'sleep 0.3; exec asciiquarium'
+```
+
+- **Metadata** goes at the top, one `THEME_*="value"` per line, with **literal values** (no `$HOME`, no `$(...)`), so it can be read without running the theme: `grep -H '^THEME_DESCRIPTION' ~/.config/wayvoid/themes/*`.
+- `THEME_REQUIRES` lists the programs the theme needs; checking them makes a missing one show up clearly in the logs. Alternatives are written `a|b` and checked by the theme itself (see `web`).
+- `THEME_USAGE` shows its options, which it parses itself from its arguments. Check them **before** starting anything slow, and exit with an error message: it reaches wayvoid's log.
+- **`exec`** the final program, so it is the process wayvoid stops on wake (wayvoid stops the whole process group anyway).
+- It must show itself **fullscreen** and keep running; one that exits within 2 seconds is considered broken (that monitor goes black). See [how themes work](#how-themes-work).
+- Write it in any language: in Python, the same `THEME_*="value"` lines are valid code (see `pipes3d`).
+
+Tips learned from the examples:
+
+- **Terminal programs** (`foot` is a small, Wayland-native terminal): start them after `sleep 0.3`, so the terminal is already fullscreen. Some (cmatrix, tty-clock) keep the size they started with and would only draw in an 80x24 corner.
+- **Over the live desktop**: a transparent window shows the desktop *live* underneath, with windows still updating (unlike X11 screensavers, which drew over a frozen screenshot). With foot: `-o colors-dark.alpha=0.0 -o colors-dark.alpha-mode=all -o csd.preferred=none --maximized`. Maximized, because at least on labwc a fullscreen window is drawn opaque.
+- **Browsers**: use a separate profile (`--user-data-dir`, or Firefox's `--profile` with `--new-instance`). Otherwise the page is handed to the browser you already have open and the process exits at once.
+- **mpv**: pass `--stop-screensaver=no`. A playing mpv otherwise asks the compositor not to blank, which may wake the screen right away.
+- **SDL programs** (pygame, games...): set `SDL_VIDEO_ALLOW_SCREENSAVER=1`, for the same reason.
+- **Several monitors** (`multimonitor`): one instance runs per monitor, with its name in `$WAYVOID_OUTPUT`, e.g. for `mpv --fs-screen-name`.
+
+### Running a program directly
+
+A theme doesn't have to be installed: anything after the seconds can be a command, run as is. Handy to try something out before turning it into a theme:
+
+```sh
+wayvoid 300 mpv --fs --no-osc --no-audio --loop-playlist=inf --stop-screensaver=no ~/Videos/aquarium.mp4
+wayvoid 300 foot --fullscreen sh -c 'sleep 0.3; exec cmatrix -b'
+```
+
+The command runs directly, without a shell: wrap it in `sh -c '...'` for variables, pipes or several commands.
 
 ### Black screen
+
+`blank` is the plain black screen (and the only mode without the `theme` feature):
 
 ```sh
 wayvoid 300                    # build without `theme`
 wayvoid 300 blank              # build with `theme`
 wayvoid --ignore-mouse 600 blank
 ```
-
-### Terminal animations
-
-Any terminal program works if it runs inside a fullscreen terminal. `foot` is a small, Wayland-native terminal:
-
-```sh
-# The Matrix rain on black
-wayvoid 300 foot -o colors-dark.background=000000 --fullscreen sh -c 'sleep 0.3; exec cmatrix -b'
-
-# Big centered clock
-wayvoid 300 foot -o colors-dark.background=000000 --fullscreen sh -c 'sleep 0.3; exec tty-clock -c -s -C 2'
-
-# A clock bouncing around the screen
-wayvoid 300 foot -o colors-dark.background=000000 --fullscreen sh -c 'sleep 0.3; exec tty-clock -s -r -C 2'
-
-# A big clock jumping to a random spot every 10 seconds (examples/jumpclock, needs figlet)
-wayvoid 300 foot -o colors-dark.background=000000 --fullscreen sh -c 'sleep 0.3; exec examples/jumpclock 10'
-
-# An aquarium, pipes, a growing bonsai
-wayvoid 300 foot --fullscreen sh -c 'sleep 0.3; exec asciiquarium'
-wayvoid 300 foot --fullscreen sh -c 'sleep 0.3; exec pipes.sh'
-wayvoid 300 foot --fullscreen sh -c 'sleep 0.3; exec cbonsai -l -i'
-```
-
-Moving clocks also keep anything from staying on the same pixels, which avoids burn-in on OLED screens.
-
-The `sleep 0.3` gives the terminal time to become fullscreen first: some programs (cmatrix among them) keep the size they started with and would only draw in an 80x24 corner.
-
-**Over the live desktop.** If the theme's window is transparent, the desktop shows through *live*, with windows still updating underneath (unlike X11 screensavers, which drew over a frozen screenshot):
-
-```sh
-wayvoid 300 foot -o csd.preferred=none -o colors-dark.alpha=0.0 -o colors-dark.alpha-mode=all \
-    --maximized sh -c 'sleep 0.3; exec cmatrix -b'
-```
-
-- `--maximized` instead of `--fullscreen`: at least with foot on labwc, a fullscreen window is drawn opaque.
-- `alpha-mode=all`: cmatrix paints its cells with the "black" palette color, which foot would otherwise keep opaque.
-- `csd.preferred=none`: no title bar.
-
-### Videos
-
-`mpv` is the easiest choice:
-
-```sh
-# One video in a loop
-wayvoid 300 mpv --fs --loop-file=inf --no-audio --no-osc --stop-screensaver=no ~/Videos/aquarium.mp4
-
-# A whole folder, shuffled
-wayvoid 300 mpv --fs --shuffle --loop-playlist=inf --no-audio --no-osc --stop-screensaver=no ~/Videos/screensaver/
-```
-
-`--stop-screensaver=no` matters: a playing mpv otherwise asks the compositor not to blank, which may wake the screen right away (see [notes](#how-themes-work)).
-
-With `multimonitor`, use `$WAYVOID_OUTPUT` to put each instance on its monitor (it needs a shell to expand the variable):
-
-```sh
-wayvoid 300 sh -c 'exec mpv --fs --fs-screen-name="$WAYVOID_OUTPUT" --loop-file=inf \
-    --no-audio --no-osc --stop-screensaver=no ~/Videos/aquarium.mp4'
-```
-
-### Animated GIFs and images
-
-```sh
-# An animated GIF (mpv plays them like videos)
-wayvoid 300 mpv --fs --loop-file=inf --no-osc --stop-screensaver=no ~/Pictures/fire.gif
-
-# Slideshow, 10 seconds per image
-wayvoid 300 mpv --fs --image-display-duration=10 --shuffle --loop-playlist=inf \
-    --no-osc --stop-screensaver=no ~/Pictures/wallpapers/
-```
-
-### Generated animations (no files needed)
-
-`ffplay` (part of FFmpeg) can render synthetic sources:
-
-```sh
-wayvoid 300 ffplay -fs -loglevel quiet -f lavfi -i mandelbrot
-wayvoid 300 ffplay -fs -loglevel quiet -f lavfi -i 'life=s=320x180:mold=10:ratio=0.1:death_color=#000000:life_color=#00ff00,scale=1920:1080:flags=neighbor'
-```
-
-### WebGL and HTML5
-
-Any web page in a browser's kiosk mode. Use a **separate profile**: otherwise the browser hands the page to the instance you already have open and the process exits immediately (wayvoid would treat it as a failed theme, and couldn't close the window on wake).
-
-```sh
-# Chromium (or Chrome: google-chrome-stable)
-wayvoid 300 chromium --kiosk --no-first-run --user-data-dir=/tmp/wayvoid-chromium --ozone-platform=wayland \
-    https://webglsamples.org/aquarium/aquarium.html
-
-# Firefox
-wayvoid 300 sh -c 'mkdir -p /tmp/wayvoid-firefox && exec firefox --kiosk --new-instance \
-    --profile /tmp/wayvoid-firefox https://webglsamples.org/aquarium/aquarium.html'
-```
-
-A local `file:///…/index.html` works just as well, so you can write your own HTML5 screensaver.
-
-### GLSL shaders
-
-- **Shadertoy** shaders run in the browser through their embed URL:
-
-  ```sh
-  wayvoid 300 chromium --kiosk --no-first-run --user-data-dir=/tmp/wayvoid-chromium --ozone-platform=wayland \
-      'https://www.shadertoy.com/embed/XsXXDn?gui=false&paused=false&muted=true'
-  ```
-
-- **Local fragment shaders** with [glslViewer](https://github.com/patriciogonzalezvivo/glslViewer):
-
-  ```sh
-  wayvoid 300 glslViewer ~/shaders/plasma.frag --fullscreen
-  ```
 
 ### How themes work
 

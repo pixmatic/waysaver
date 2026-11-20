@@ -1,0 +1,35 @@
+#!/bin/sh
+THEME_NAME="Shadertoy"
+THEME_DESCRIPTION="A shader from shadertoy.com, fullscreen in a kiosk-mode browser (needs Internet)."
+THEME_VERSION="1.0"
+THEME_REQUIRES="google-chrome-stable|chromium|firefox"
+THEME_USAGE="shadertoy [ID]"
+
+# ID: the shader's id, the last part of its address
+# (https://www.shadertoy.com/view/XsXXDn); default XsXXDn. It opens the
+# shader's embeddable page, without controls.
+#
+# Example: wayvoid 300 shadertoy XsXXDn
+
+id=${1:-XsXXDn}
+case $id in
+    *[!a-zA-Z0-9]* | '') echo "$0: invalid shader id: $id" >&2; exit 2 ;;
+esac
+url="https://www.shadertoy.com/embed/$id?gui=false&paused=false&muted=true"
+
+# Any of the browsers will do (alternatives are separated by "|"). Each
+# monitor gets its own browser profile, so the page isn't handed over to a
+# browser that is already open (the process would exit at once).
+browser=$(command -v google-chrome-stable || command -v chromium || command -v firefox) || {
+    echo "$0: Chrome, Chromium or Firefox is required" >&2
+    exit 1
+}
+profile=${XDG_CACHE_HOME:-$HOME/.cache}/wayvoid/profiles/${WAYVOID_OUTPUT:-screen}
+case ${browser##*/} in
+    firefox)
+        mkdir -p "$profile/firefox"
+        exec "$browser" --kiosk --new-instance --profile "$profile/firefox" "$url" ;;
+    *)
+        exec "$browser" --kiosk --no-first-run --no-default-browser-check --ozone-platform=wayland \
+            --user-data-dir="$profile/chrome" "$url" ;;
+esac

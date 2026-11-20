@@ -1,0 +1,41 @@
+#!/bin/sh
+THEME_NAME="Web page"
+THEME_DESCRIPTION="A web page (WebGL, HTML5...) in a kiosk-mode browser."
+THEME_VERSION="1.1"
+THEME_REQUIRES="google-chrome-stable|chromium|firefox"
+THEME_USAGE="web [--browser chrome|chromium|firefox] [URL]"
+
+# Options:
+#   --browser NAME   which browser to use; default: the first one installed,
+#                    in the order above (alternatives are separated by "|")
+#   URL              default: a WebGL aquarium
+#
+# Example: wayvoid 300 web --browser firefox file:///home/me/screensaver/index.html
+
+want=
+if [ "${1:-}" = --browser ]; then
+    [ $# -ge 2 ] || { echo "$0: --browser needs a value" >&2; exit 2; }
+    want=$2
+    shift 2
+fi
+url=${1:-https://webglsamples.org/aquarium/aquarium.html}
+
+case $want in
+    '') browser=$(command -v google-chrome-stable || command -v chromium || command -v firefox) ;;
+    chrome) browser=$(command -v google-chrome-stable) ;;
+    chromium | firefox) browser=$(command -v "$want") ;;
+    *) echo "$0: --browser must be chrome, chromium or firefox" >&2; exit 2 ;;
+esac
+[ -n "$browser" ] || { echo "$0: ${want:-Chrome, Chromium or Firefox} is not installed" >&2; exit 1; }
+
+# Each monitor gets its own browser profile, so the page isn't handed over to
+# a browser that is already open (the process would exit at once).
+profile=${XDG_CACHE_HOME:-$HOME/.cache}/wayvoid/profiles/${WAYVOID_OUTPUT:-screen}
+case ${browser##*/} in
+    firefox)
+        mkdir -p "$profile/firefox"
+        exec "$browser" --kiosk --new-instance --profile "$profile/firefox" "$url" ;;
+    *)
+        exec "$browser" --kiosk --no-first-run --no-default-browser-check --ozone-platform=wayland \
+            --user-data-dir="$profile/chrome" "$url" ;;
+esac

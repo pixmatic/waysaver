@@ -1,0 +1,212 @@
+#!/usr/bin/env bash
+THEME_NAME="3D maze"
+THEME_DESCRIPTION="A walk through a random 3D maze, from one end to the other, then a new maze."
+THEME_VERSION="1.1"
+THEME_REQUIRES="google-chrome-stable|chromium|firefox"
+THEME_USAGE="maze3d [--size N] [--speed N] [--color HUE]"
+
+# Options:
+#   --size N    the maze is N x N cells, 4-40; default 12
+#   --speed N   walking speed, e.g. 0.5 (slower) or 2 (faster); default 1
+#   --color HUE the walls' hue, 0-360 (0 red, 120 green, 240 blue...);
+#               default: a random one for each maze
+#
+# Example: wayvoid 300 maze3d --size 20 --speed 0.7 --color 30
+#
+# The page is plain HTML and JavaScript (no libraries, no network), written to
+# the cache directory and opened in a kiosk-mode browser. It draws the maze by
+# ray casting: one ray per column of the screen, as early 3D games did.
+
+fail() { echo "$0: $*" >&2; exit 2; }
+
+size=12 speed=1 color=
+while (($#)); do
+    case $1 in
+        --size) size=${2:-}; shift 2 || fail "--size needs a value" ;;
+        --speed) speed=${2:-}; shift 2 || fail "--speed needs a value" ;;
+        --color) color=${2:-}; shift 2 || fail "--color needs a value" ;;
+        *) fail "unknown option: $1" ;;
+    esac
+done
+[[ $size =~ ^[0-9]+$ ]] && ((size >= 4 && size <= 40)) || fail "--size must be 4-40"
+[[ $speed =~ ^[0-9]+(\.[0-9]+)?$ ]] || fail "--speed must be a number"
+[[ -z $color ]] || { [[ $color =~ ^[0-9]+$ ]] && ((color <= 360)); } || fail "--color must be a hue, 0-360"
+
+# Opens the page file $1 with the URL fragment $2 (the options) in the first
+# browser found, in kiosk mode. Each monitor gets its own browser profile, so
+# the page isn't handed over to a browser that is already open (the process
+# would exit at once).
+open_page() {
+    local url="file://$1#$2" profile
+    profile=${XDG_CACHE_HOME:-$HOME/.cache}/wayvoid/profiles/${WAYVOID_OUTPUT:-screen}
+    if browser=$(command -v google-chrome-stable || command -v chromium); then
+        exec "$browser" --kiosk --no-first-run --no-default-browser-check --ozone-platform=wayland \
+            --user-data-dir="$profile/chrome" "$url"
+    elif command -v firefox >/dev/null; then
+        mkdir -p "$profile/firefox"
+        exec firefox --kiosk --new-instance --profile "$profile/firefox" "$url"
+    fi
+    echo "$0: Chrome, Chromium or Firefox is required" >&2
+    exit 1
+}
+
+page=${XDG_CACHE_HOME:-$HOME/.cache}/wayvoid/pages/maze3d.html
+mkdir -p "${page%/*}"
+cat > "$page" <<'EOF'
+<!doctype html>
+<meta charset="utf-8">
+<title>maze3d</title>
+<style>html, body { margin: 0; height: 100%; background: #000; overflow: hidden; cursor: none }
+canvas { display: block; width: 100%; height: 100% }</style>
+<canvas></canvas>
+<script>
+// Options come in the URL fragment: #size=...&speed=...&color=...
+const opt = new URLSearchParams(location.hash.slice(1));
+const SIZE = Math.min(40, Math.max(4, parseInt(opt.get("size")) || 12));
+const SPEED = parseFloat(opt.get("speed")) || 1;
+const HUE = opt.get("color"); // empty: random for each maze
+
+const canvas = document.querySelector("canvas");
+const ctx = canvas.getContext("2d");
+// Rendered at half resolution (one ray per column), scaled up by CSS.
+function resize() {
+    canvas.width = Math.round(innerWidth / 2);
+    canvas.height = Math.round(innerHeight / 2);
+}
+
+// --- The maze -----------------------------------------------------------------
+// A grid of blocks, 1 = wall. Cells sit at odd coordinates; the blocks
+// between two cells are opened to connect them.
+let grid, n, path, hue;
+const me = { x: 1.5, y: 1.5, angle: 0, step: 1 };
+let fade = 0; // fades in when a maze starts, out when it ends
+
+function newMaze() {
+    n = 2 * SIZE + 1;
+    grid = Array.from({ length: n }, () => new Uint8Array(n).fill(1));
+    // Depth-first carving: a perfect maze (exactly one way between two cells).
+    const stack = [[1, 1]];
+    grid[1][1] = 0;
+    while (stack.length) {
+        const [x, y] = stack[stack.length - 1];
+        const next = [[2, 0], [-2, 0], [0, 2], [0, -2]]
+            .map(([dx, dy]) => [x + dx, y + dy, dx, dy])
+            .filter(([nx, ny]) => nx > 0 && ny > 0 && nx < n - 1 && ny < n - 1 && grid[ny][nx]);
+        if (!next.length) { stack.pop(); continue; }
+        const [nx, ny, dx, dy] = next[Math.floor(Math.random() * next.length)];
+        grid[y + dy / 2][x + dx / 2] = 0;
+        grid[ny][nx] = 0;
+        stack.push([nx, ny]);
+    }
+    // Breadth-first search for the block farthest from the start: the
+    // longest walk, which becomes the path.
+    const prev = new Map([["1,1", null]]);
+    let queue = [[1, 1]], last = [1, 1];
+    while (queue.length) {
+        const nextQueue = [];
+        for (const [x, y] of queue) {
+            last = [x, y];
+            for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+                const k = `${x + dx},${y + dy}`;
+                if (!grid[y + dy][x + dx] && !prev.has(k)) {
+                    prev.set(k, [x, y]);
+                    nextQueue.push([x + dx, y + dy]);
+                }
+            }
+        }
+        queue = nextQueue;
+    }
+    path = [];
+    for (let p = last; p; p = prev.get(`${p[0]},${p[1]}`)) path.unshift(p);
+    hue = HUE ? Number(HUE) : Math.floor(Math.random() * 360);
+    // Start in the first block, already facing the second.
+    me.x = 1.5; me.y = 1.5; me.step = 1;
+    me.angle = Math.atan2(path[1][1] - path[0][1], path[1][0] - path[0][0]);
+    fade = 0;
+}
+
+// --- Walking ------------------------------------------------------------------
+// Turns toward the next block of the path, then walks into it.
+function walk(dt) {
+    if (me.step >= path.length) {
+        fade -= dt;
+        if (fade <= -1) newMaze();
+        return;
+    }
+    fade = Math.min(1, fade + dt);
+    const tx = path[me.step][0] + 0.5, ty = path[me.step][1] + 0.5;
+    const want = Math.atan2(ty - me.y, tx - me.x);
+    const turn = Math.atan2(Math.sin(want - me.angle), Math.cos(want - me.angle));
+    const maxTurn = 3 * SPEED * dt;
+    if (Math.abs(turn) > 0.001) {
+        me.angle += Math.max(-maxTurn, Math.min(maxTurn, turn));
+        return;
+    }
+    const dist = Math.hypot(tx - me.x, ty - me.y), move = 2 * SPEED * dt;
+    if (dist <= move) { me.x = tx; me.y = ty; me.step++; return; }
+    me.x += (tx - me.x) / dist * move;
+    me.y += (ty - me.y) / dist * move;
+}
+
+// --- Drawing ------------------------------------------------------------------
+function draw() {
+    const W = canvas.width, H = canvas.height;
+    const light = Math.max(0, fade < 0 ? 1 + fade : fade);
+    // Ceiling and floor: gradients that darken toward the horizon.
+    let g = ctx.createLinearGradient(0, 0, 0, H / 2);
+    g.addColorStop(0, `hsl(${hue + 180} 30% ${14 * light}%)`);
+    g.addColorStop(1, "#000");
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H / 2);
+    g = ctx.createLinearGradient(0, H / 2, 0, H);
+    g.addColorStop(0, "#000");
+    g.addColorStop(1, `hsl(${hue} 20% ${20 * light}%)`);
+    ctx.fillStyle = g;
+    ctx.fillRect(0, H / 2, W, H / 2);
+
+    const dirX = Math.cos(me.angle), dirY = Math.sin(me.angle);
+    const planeX = -dirY * 0.7, planeY = dirX * 0.7; // about a 70° field of view
+    for (let col = 0; col < W; col++) {
+        // One ray per column, stepped from block to block until it hits a wall.
+        const cam = 2 * col / W - 1;
+        const rx = dirX + planeX * cam, ry = dirY + planeY * cam;
+        let mx = Math.floor(me.x), my = Math.floor(me.y);
+        const ddx = Math.abs(1 / rx), ddy = Math.abs(1 / ry);
+        const sx = rx < 0 ? -1 : 1, sy = ry < 0 ? -1 : 1;
+        let distX = (rx < 0 ? me.x - mx : mx + 1 - me.x) * ddx;
+        let distY = (ry < 0 ? me.y - my : my + 1 - me.y) * ddy;
+        let side;
+        do {
+            if (distX < distY) { distX += ddx; mx += sx; side = 0; }
+            else { distY += ddy; my += sy; side = 1; }
+        } while (!grid[my][mx]);
+        const dist = side ? distY - ddy : distX - ddx;
+        // Where the ray hit the wall (0-1 across the block): dark seams at
+        // the edges and in the middle draw panels on it.
+        let u = side ? me.x + dist * rx : me.y + dist * ry;
+        u -= Math.floor(u);
+        const seam = u < 0.03 || u > 0.97 || Math.abs(u - 0.5) < 0.01;
+        const h = H / dist;
+        const fog = Math.exp(-dist * 0.18) * light;
+        const lum = (side ? 34 : 48) * fog * (seam ? 0.4 : 1);
+        ctx.fillStyle = `hsl(${hue} 55% ${lum}%)`;
+        ctx.fillRect(col, (H - h) / 2, 1, h);
+    }
+}
+
+let then = 0;
+function frame(ms) {
+    walk(Math.min(0.1, (ms - then) / 1000));
+    then = ms;
+    draw();
+    requestAnimationFrame(frame);
+}
+
+addEventListener("resize", resize);
+resize();
+newMaze();
+requestAnimationFrame(ms => { then = ms; frame(ms); });
+</script>
+EOF
+
+open_page "$page" "size=$size&speed=$speed&color=$color"

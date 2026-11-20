@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+THEME_NAME="Jumping clock"
+THEME_DESCRIPTION="A big clock that jumps to a random spot every few seconds (avoids burn-in)."
+THEME_VERSION="1.1"
+THEME_REQUIRES="foot figlet"
+THEME_USAGE="jumpclock [--font NAME] [--color NAME] [--background RRGGBB] [SECONDS]"
+
+# Example: wayvoid 300 jumpclock --font slant --color cyan --background 101828 5
+#
+# Options:
+#   --font NAME           a figlet font (see /usr/share/figlet/fonts); default "big"
+#   --color NAME          black, red, green, yellow, blue, magenta, cyan or white;
+#                         default white
+#   --background RRGGBB   background color; default 000000 (black)
+#   SECONDS               how often the clock jumps; default 10
+
+for dep in $THEME_REQUIRES; do
+    command -v "$dep" >/dev/null || { echo "$0: $dep is not installed" >&2; exit 1; }
+done
+
+fail() { echo "$0: $*" >&2; exit 2; }
+
+args=("$@")
+font=big color=white background=000000 every=10
+while (($#)); do
+    case $1 in
+        --font | --color | --background) (($# >= 2)) || fail "$1 needs a value" ;;&
+        --font) font=$2; shift 2 ;;
+        --color) color=$2; shift 2 ;;
+        --background) background=$2; shift 2 ;;
+        -*) fail "unknown option: $1" ;;
+        *) every=$1; shift ;;
+    esac
+done
+
+# Checked before opening the terminal, so errors reach wayvoid's log.
+figlet -f "$font" x >/dev/null 2>&1 || fail "unknown font: $font"
+declare -A codes=([black]=30 [red]=31 [green]=32 [yellow]=33 [blue]=34 [magenta]=35 [cyan]=36 [white]=37)
+[[ -n ${codes[$color]:-} ]] || fail "--color must be black, red, green, yellow, blue, magenta, cyan or white"
+[[ $background =~ ^[0-9a-fA-F]{6}$ ]] || fail "--background must be RRGGBB, e.g. 101828"
+[[ $every =~ ^[0-9]+$ ]] && ((every >= 1)) || fail "SECONDS must be a whole number, 1 or more"
+
+# Started by wayvoid: open a fullscreen terminal that runs this same script.
+# The short sleep lets it become fullscreen first, so the size is the final one.
+if [[ -z ${JUMPCLOCK_IN_TERMINAL:-} ]]; then
+    export JUMPCLOCK_IN_TERMINAL=1
+    exec foot -o colors-dark.background="$background" --fullscreen \
+        bash -c 'sleep 0.3; exec "$0" "$@"' "$0" "${args[@]}"
+fi
+
+printf '\e[?25l\e[1;%sm' "${codes[$color]}"
+trap 'printf "\e[0m\e[?25h"' EXIT
+while :; do
+    text=$(figlet -f "$font" "$(date +%H:%M)")
+    w=$(wc -L <<<"$text")
+    h=$(wc -l <<<"$text")
+    y=$((RANDOM % ($(tput lines) - h + 1)))
+    x=$((RANDOM % ($(tput cols) - w + 1)))
+    clear
+    i=0
+    while IFS= read -r line; do
+        tput cup $((y + i)) "$x"
+        printf '%s' "$line"
+        i=$((i + 1))
+    done <<<"$text"
+    sleep "$every"
+done

@@ -1,0 +1,46 @@
+#!/bin/sh
+THEME_NAME="Matrix"
+THEME_DESCRIPTION="The Matrix rain, in a fullscreen terminal."
+THEME_VERSION="1.1"
+THEME_REQUIRES="foot cmatrix"
+THEME_USAGE="matrix [--color NAME] [--background RRGGBB]"
+
+# Example: wayvoid 300 matrix --color cyan --background 001018
+#
+# Options:
+#   --color NAME          black, red, green, yellow, blue, magenta, cyan or white; default green
+#   --background RRGGBB   background color; default 000000 (black)
+
+for dep in $THEME_REQUIRES; do
+    command -v "$dep" >/dev/null || { echo "$0: $dep is not installed" >&2; exit 1; }
+done
+
+fail() { echo "$0: $*" >&2; exit 2; }
+# Whether $1 is a color as RRGGBB (hex).
+is_rgb() { case $1 in [0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]) ;; *) return 1 ;; esac; }
+# The terminal color number (0-7) of a color name.
+color_index() {
+    case $1 in
+        black) echo 0 ;; red) echo 1 ;; green) echo 2 ;; yellow) echo 3 ;;
+        blue) echo 4 ;; magenta) echo 5 ;; cyan) echo 6 ;; white) echo 7 ;;
+        *) return 1 ;;
+    esac
+}
+
+color=green background=000000
+while [ $# -gt 0 ]; do
+    [ $# -ge 2 ] || case $1 in --*) fail "$1 needs a value" ;; esac
+    case $1 in
+        --color) color=$2 ;;
+        --background) background=$2 ;;
+        *) fail "unknown option: $1" ;;
+    esac
+    shift 2
+done
+color_index "$color" >/dev/null || fail "--color must be black, red, green, yellow, blue, magenta, cyan or white"
+is_rgb "$background" || fail "--background must be RRGGBB, e.g. 101828"
+
+# The short sleep lets the terminal become fullscreen first: cmatrix keeps
+# the size it started with.
+exec foot -o colors-dark.background="$background" --fullscreen \
+    sh -c 'sleep 0.3; exec cmatrix -b -C "$0"' "$color"

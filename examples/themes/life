@@ -1,0 +1,37 @@
+#!/bin/sh
+THEME_NAME="Game of Life"
+THEME_DESCRIPTION="Conway's Game of Life, with cells that fade as they die."
+THEME_VERSION="1.1"
+THEME_REQUIRES="ffplay"
+THEME_USAGE="life [--color RRGGBB] [--background RRGGBB]"
+
+# Example: wayvoid 300 life --color ff8800 --background 100800
+#
+# Options:
+#   --color RRGGBB        color of the living cells; default 00ff00 (green)
+#   --background RRGGBB   background color; default 000000 (black)
+
+for dep in $THEME_REQUIRES; do
+    command -v "$dep" >/dev/null || { echo "$0: $dep is not installed" >&2; exit 1; }
+done
+
+fail() { echo "$0: $*" >&2; exit 2; }
+# Whether $1 is a color as RRGGBB (hex).
+is_rgb() { case $1 in [0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]) ;; *) return 1 ;; esac; }
+
+color=00ff00 background=000000
+while [ $# -gt 0 ]; do
+    [ $# -ge 2 ] || case $1 in --*) fail "$1 needs a value" ;; esac
+    case $1 in
+        --color) color=$2 ;;
+        --background) background=$2 ;;
+        *) fail "unknown option: $1" ;;
+    esac
+    shift 2
+done
+is_rgb "$color" || fail "--color must be RRGGBB, e.g. ff8800"
+is_rgb "$background" || fail "--background must be RRGGBB, e.g. 101828"
+
+# FFmpeg's built-in life source on a small grid, scaled up without smoothing.
+exec ffplay -fs -loglevel quiet -f lavfi \
+    -i "life=s=320x180:mold=10:ratio=0.1:death_color=#$background:life_color=#$color,scale=1920:1080:flags=neighbor"

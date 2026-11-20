@@ -1,0 +1,184 @@
+#!/usr/bin/env bash
+THEME_NAME="3D text"
+THEME_DESCRIPTION="Your text with depth, spinning in 3D while it drifts around the screen."
+THEME_VERSION="1.1"
+THEME_REQUIRES="google-chrome-stable|chromium|firefox"
+THEME_USAGE="text3d [--font FONT] [--color COLOR] [--background COLOR] [--speed N] [TEXT...]"
+
+# Options:
+#   --font FONT     any installed font family, e.g. "DejaVu Serif"; default Impact
+#   --color COLOR   a CSS color (red, #3cf...); default "cycle": slowly
+#                   shifting through every hue
+#   --background COLOR  a CSS color; default black
+#   --speed N       spin speed, e.g. 0.5 (slower) or 2 (faster); default 1
+#   TEXT            default: "wayvoid"
+#
+# Example: wayvoid 300 text3d --font "DejaVu Serif" --color gold --background "#102030" "Hello"
+#
+# The page is plain HTML and JavaScript (no libraries, no network), written to
+# the cache directory and opened in a kiosk-mode browser.
+
+fail() { echo "$0: $*" >&2; exit 2; }
+
+font=Impact color=cycle background=black speed=1
+while (($#)); do
+    case $1 in
+        --font) font=${2:-}; shift 2 || fail "--font needs a value" ;;
+        --color) color=${2:-}; shift 2 || fail "--color needs a value" ;;
+        --background) background=${2:-}; shift 2 || fail "--background needs a value" ;;
+        --speed) speed=${2:-}; shift 2 || fail "--speed needs a value" ;;
+        --) shift; break ;;
+        -*) fail "unknown option: $1" ;;
+        *) break ;;
+    esac
+done
+text=${*:-wayvoid}
+[[ $speed =~ ^[0-9]+(\.[0-9]+)?$ ]] || fail "--speed must be a number"
+
+# Percent-encodes $1 for a URL (byte by byte, so UTF-8 text survives).
+urlencode() {
+    local LC_ALL=C s=$1 i c out=
+    for ((i = 0; i < ${#s}; i++)); do
+        c=${s:i:1}
+        case $c in
+            [a-zA-Z0-9.~_-]) out+=$c ;;
+            *) printf -v c '%%%02X' "'$c"; out+=$c ;;
+        esac
+    done
+    printf '%s' "$out"
+}
+
+# Opens the page file $1 with the URL fragment $2 (the options) in the first
+# browser found, in kiosk mode. Each monitor gets its own browser profile, so
+# the page isn't handed over to a browser that is already open (the process
+# would exit at once).
+open_page() {
+    local url="file://$1#$2" profile
+    profile=${XDG_CACHE_HOME:-$HOME/.cache}/wayvoid/profiles/${WAYVOID_OUTPUT:-screen}
+    if browser=$(command -v google-chrome-stable || command -v chromium); then
+        exec "$browser" --kiosk --no-first-run --no-default-browser-check --ozone-platform=wayland \
+            --user-data-dir="$profile/chrome" "$url"
+    elif command -v firefox >/dev/null; then
+        mkdir -p "$profile/firefox"
+        exec firefox --kiosk --new-instance --profile "$profile/firefox" "$url"
+    fi
+    echo "$0: Chrome, Chromium or Firefox is required" >&2
+    exit 1
+}
+
+page=${XDG_CACHE_HOME:-$HOME/.cache}/wayvoid/pages/text3d.html
+mkdir -p "${page%/*}"
+cat > "$page" <<'EOF'
+<!doctype html>
+<meta charset="utf-8">
+<title>text3d</title>
+<style>html, body { margin: 0; height: 100%; background: #000; overflow: hidden; cursor: none }
+canvas { display: block; width: 100%; height: 100% }</style>
+<canvas></canvas>
+<script>
+// Options come in the URL fragment: #text=...&font=...&color=...&speed=...
+const opt = new URLSearchParams(location.hash.slice(1));
+const TEXT = opt.get("text") || "wayvoid";
+const FONT = opt.get("font") || "Impact";
+const COLOR = opt.get("color") || "cycle";
+const BACKGROUND = opt.get("background") || "#000";
+document.body.style.background = BACKGROUND;
+const SPEED = parseFloat(opt.get("speed")) || 1;
+
+const canvas = document.querySelector("canvas");
+const ctx = canvas.getContext("2d");
+// The text, rendered once in white; tinted copies are made from it.
+const mask = document.createElement("canvas");
+const face = document.createElement("canvas");
+const side = document.createElement("canvas");
+let W, H;
+
+function layout() {
+    W = canvas.width = innerWidth * devicePixelRatio;
+    H = canvas.height = innerHeight * devicePixelRatio;
+    const g = mask.getContext("2d");
+    let size = H * 0.2;
+    g.font = `bold ${size}px "${FONT}", Impact, sans-serif`;
+    // Shrink long texts so they fit even when facing the screen.
+    size = Math.min(size, size * (W * 0.6) / g.measureText(TEXT).width);
+    const font = `bold ${size}px "${FONT}", Impact, sans-serif`;
+    g.font = font;
+    mask.width = face.width = side.width = Math.ceil(g.measureText(TEXT).width + size * 0.2);
+    mask.height = face.height = side.height = Math.ceil(size * 1.4);
+    g.font = font;  // resizing a canvas resets its state
+    g.textAlign = "center";
+    g.textBaseline = "middle";
+    g.fillStyle = "#fff";
+    g.fillText(TEXT, mask.width / 2, mask.height / 2);
+}
+
+// Copies the white mask into `target`, tinted with `color` and darkened by
+// `shade` (0 to 1).
+function tint(target, color, shade = 0) {
+    const g = target.getContext("2d");
+    g.globalCompositeOperation = "copy";
+    g.drawImage(mask, 0, 0);
+    g.globalCompositeOperation = "source-in";
+    g.fillStyle = color;
+    g.fillRect(0, 0, target.width, target.height);
+    g.globalCompositeOperation = "source-atop";
+    g.fillStyle = `rgba(0, 0, 0, ${shade})`;
+    g.fillRect(0, 0, target.width, target.height);
+}
+
+function frame(ms) {
+    const t = ms / 1000;
+    const hue = (t * 12) % 360;
+    const color = COLOR === "cycle" ? `hsl(${hue} 90% 62%)` : COLOR;
+    tint(face, color);
+    tint(side, color, 0.65); // the sides: the same color, much darker
+
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.fillStyle = BACKGROUND;
+    ctx.fillRect(0, 0, W, H);
+
+    const a = t * 0.9 * SPEED;                  // spin around the vertical axis
+    const b = 0.35 * Math.sin(t * 0.5 * SPEED); // gentle tilt
+    // Drift around, as far as the text's size allows (it stays on screen).
+    const roomX = Math.max(0, W - face.width * 1.15) / 2;
+    const roomY = Math.max(0, H - face.height * 1.6) / 2;
+    const cx = W / 2 + roomX * Math.sin(t * 0.21);
+    const cy = H / 2 + roomY * Math.sin(t * 0.29);
+    const depth = face.height * 0.25;
+    const focal = H * 1.6;
+
+    // The depth is a stack of flat layers. Sort them back to front.
+    const layers = [];
+    const n = Math.max(8, Math.round(depth / 1.5));
+    for (let i = 0; i <= n; i++) {
+        const z = (i / n - 0.5) * depth;
+        layers.push({ i, z, near: z * Math.cos(a) * Math.cos(b) });
+    }
+    layers.sort((p, q) => p.near - q.near);
+    const front = Math.cos(a) * Math.cos(b) > 0 ? n : 0;
+
+    for (const l of layers) {
+        const f = focal / (focal - l.near);     // perspective
+        const ox = l.z * Math.sin(a) * f;
+        const oy = -l.z * Math.cos(a) * Math.sin(b) * f;
+        ctx.setTransform(Math.cos(a) * f, Math.sin(a) * Math.sin(b) * f,
+                         0, Math.cos(b) * f, cx + ox, cy + oy);
+        if (l.i === front) {
+            ctx.shadowColor = color;
+            ctx.shadowBlur = 30;
+        }
+        ctx.drawImage(l.i === front ? face : side, -face.width / 2, -face.height / 2);
+        ctx.shadowBlur = 0;
+    }
+    requestAnimationFrame(frame);
+}
+
+addEventListener("resize", layout);
+document.fonts.load(`bold 10px "${FONT}"`).finally(() => {
+    layout();
+    requestAnimationFrame(frame);
+});
+</script>
+EOF
+
+open_page "$page" "text=$(urlencode "$text")&font=$(urlencode "$font")&color=$(urlencode "$color")&background=$(urlencode "$background")&speed=$speed"

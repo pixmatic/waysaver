@@ -1,0 +1,51 @@
+#!/bin/sh
+THEME_NAME="Pipes"
+THEME_DESCRIPTION="Colored pipes crawling across a terminal, the 2D way."
+THEME_VERSION="1.1"
+THEME_REQUIRES="foot pipes.sh"
+THEME_USAGE="pipes [--count N] [--color NAME] [--background RRGGBB]"
+
+# Example: wayvoid 300 pipes --count 5 --background 202020
+#
+# Options:
+#   --count N             pipes at the same time, 1-20; default 3
+#   --color NAME          black, red, green, yellow, blue, magenta, cyan or white; default: all colors
+#   --background RRGGBB   background color; default 000000 (black)
+
+for dep in $THEME_REQUIRES; do
+    command -v "$dep" >/dev/null || { echo "$0: $dep is not installed" >&2; exit 1; }
+done
+
+fail() { echo "$0: $*" >&2; exit 2; }
+# Whether $1 is a color as RRGGBB (hex).
+is_rgb() { case $1 in [0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]) ;; *) return 1 ;; esac; }
+# The terminal color number (0-7) of a color name.
+color_index() {
+    case $1 in
+        black) echo 0 ;; red) echo 1 ;; green) echo 2 ;; yellow) echo 3 ;;
+        blue) echo 4 ;; magenta) echo 5 ;; cyan) echo 6 ;; white) echo 7 ;;
+        *) return 1 ;;
+    esac
+}
+
+count=3 color= background=000000
+while [ $# -gt 0 ]; do
+    [ $# -ge 2 ] || case $1 in --*) fail "$1 needs a value" ;; esac
+    case $1 in
+        --count) count=$2 ;;
+        --color) color=$2 ;;
+        --background) background=$2 ;;
+        *) fail "unknown option: $1" ;;
+    esac
+    shift 2
+done
+case $count in '' | *[!0-9]*) fail "--count must be a number" ;; esac
+[ "$count" -ge 1 ] && [ "$count" -le 20 ] || fail "--count must be 1-20"
+colors=
+if [ -n "$color" ]; then
+    colors="-c $(color_index "$color")" || fail "--color must be black, red, green, yellow, blue, magenta, cyan or white"
+fi
+is_rgb "$background" || fail "--background must be RRGGBB, e.g. 101828"
+
+exec foot -o colors-dark.background="$background" --fullscreen \
+    sh -c "sleep 0.3; exec pipes.sh -p $count $colors"

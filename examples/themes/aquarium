@@ -1,0 +1,32 @@
+#!/bin/sh
+THEME_NAME="Aquarium"
+THEME_DESCRIPTION="An ASCII-art aquarium."
+THEME_VERSION="1.1"
+THEME_REQUIRES="foot asciiquarium"
+THEME_USAGE="aquarium [--background RRGGBB]"
+
+# Example: wayvoid 300 aquarium --background 001a33
+#
+# Options:
+#   --background RRGGBB   background color; default 000000 (black)
+
+for dep in $THEME_REQUIRES; do
+    command -v "$dep" >/dev/null || { echo "$0: $dep is not installed" >&2; exit 1; }
+done
+
+fail() { echo "$0: $*" >&2; exit 2; }
+# Whether $1 is a color as RRGGBB (hex).
+is_rgb() { case $1 in [0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]) ;; *) return 1 ;; esac; }
+
+background=000000
+while [ $# -gt 0 ]; do
+    [ $# -ge 2 ] || case $1 in --*) fail "$1 needs a value" ;; esac
+    case $1 in
+        --background) background=$2 ;;
+        *) fail "unknown option: $1" ;;
+    esac
+    shift 2
+done
+is_rgb "$background" || fail "--background must be RRGGBB, e.g. 101828"
+
+exec foot -o colors-dark.background="$background" --fullscreen sh -c 'sleep 0.3; exec asciiquarium'

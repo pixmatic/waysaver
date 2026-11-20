@@ -1,0 +1,15 @@
+#!/bin/sh
+THEME_NAME="Mandelbrot"
+THEME_DESCRIPTION="An endless zoom into the Mandelbrot set."
+THEME_VERSION="1.0"
+THEME_REQUIRES="ffplay"
+THEME_USAGE="mandelbrot"
+
+# Example: wayvoid 300 mandelbrot
+
+for dep in $THEME_REQUIRES; do
+    command -v "$dep" >/dev/null || { echo "$0: $dep is not installed" >&2; exit 1; }
+done
+
+# ffplay (part of FFmpeg) renders FFmpeg's built-in mandelbrot source.
+exec ffplay -fs -loglevel quiet -f lavfi -i mandelbrot

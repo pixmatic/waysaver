@@ -1,0 +1,34 @@
+#!/bin/sh
+THEME_NAME="Video"
+THEME_DESCRIPTION="Videos, animated GIFs or images (a slideshow), shuffled and in a loop."
+THEME_VERSION="1.1"
+THEME_REQUIRES="mpv"
+THEME_USAGE="video [--image-time SECONDS] [FILE-OR-FOLDER...]"
+
+# Options:
+#   --image-time SECONDS   how long each still image stays; default 10
+#   FILE-OR-FOLDER         default: ~/Videos
+#
+# Example: wayvoid 300 video --image-time 30 ~/Pictures/wallpapers ~/Videos/nature
+
+for dep in $THEME_REQUIRES; do
+    command -v "$dep" >/dev/null || { echo "$0: $dep is not installed" >&2; exit 1; }
+done
+
+image_time=10
+if [ "${1:-}" = --image-time ]; then
+    [ $# -ge 2 ] || { echo "$0: --image-time needs a value" >&2; exit 2; }
+    image_time=$2
+    shift 2
+fi
+case $image_time in
+    '' | *[!0-9]*) echo "$0: --image-time must be a number of seconds" >&2; exit 2 ;;
+esac
+[ $# -eq 0 ] && set -- "$HOME/Videos"
+
+# --stop-screensaver=no: a playing mpv otherwise asks the compositor not to
+# blank, which may wake the screen right away. With multimonitor, each
+# instance goes to its own monitor.
+exec mpv --fs --no-osc --no-audio --shuffle --loop-playlist=inf \
+    --image-display-duration="$image_time" --stop-screensaver=no \
+    ${WAYVOID_OUTPUT:+--fs-screen-name="$WAYVOID_OUTPUT"} "$@"

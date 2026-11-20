@@ -1,0 +1,216 @@
+#!/usr/bin/env python3
+THEME_NAME="3D pipes"
+THEME_DESCRIPTION="Pipes growing and branching in 3D until they fill the screen, then starting over."
+THEME_VERSION="1.1"
+THEME_REQUIRES="python3 pygame"
+THEME_USAGE="pipes3d [--speed N] [--pipes N] [--size N] [--background RRGGBB]"
+
+# Options:
+#   --speed N   pipe segments per second, 1-120; default 15
+#   --pipes N   pipes drawn before starting over, 1-100; default 12
+#   --size N    the pipes live in an N x N x N grid, 4-30; default 12
+#   --background RRGGBB
+#               background color; default 000000 (black)
+#
+# Example: wayvoid 300 pipes3d --speed 30 --pipes 20 --background 0a1020
+#
+# Plain pygame drawing, no OpenGL: every segment is a few shaded lines and
+# every joint a few shaded circles, drawn back to front.
+
+import argparse
+import math
+import os
+import random
+import sys
+
+# SDL disables the screensaver by default, through Wayland's idle inhibitor
+# too; wayvoid can't tell that request apart from others, and it would wake
+# the screen right away.
+os.environ["SDL_VIDEO_ALLOW_SCREENSAVER"] = "1"
+os.environ["PYGAME_HIDE_SUPPORT_PROMPT"] = "1"
+try:
+    import pygame
+except ImportError:
+    sys.exit(f"{sys.argv[0]}: pygame is not installed (e.g. the python-pygame package)")
+
+
+def rgb(text):
+    """A color given as RRGGBB."""
+    try:
+        if len(text) != 6:
+            raise ValueError
+        return tuple(int(text[i:i + 2], 16) for i in (0, 2, 4))
+    except ValueError:
+        raise argparse.ArgumentTypeError("must be RRGGBB, e.g. 0a1020") from None
+
+
+def options():
+    def bounded(low, high):
+        def parse(text):
+            value = int(text)
+            if not low <= value <= high:
+                raise argparse.ArgumentTypeError(f"must be {low}-{high}")
+            return value
+        return parse
+
+    parser = argparse.ArgumentParser(prog="pipes3d")
+    parser.add_argument("--speed", type=bounded(1, 120), default=15)
+    parser.add_argument("--pipes", type=bounded(1, 100), default=12)
+    parser.add_argument("--size", type=bounded(4, 30), default=12)
+    parser.add_argument("--background", type=rgb, default=(0, 0, 0))
+    return parser.parse_args()
+
+
+COLORS = [(220, 50, 47), (38, 139, 210), (133, 199, 41), (240, 190, 40),
+          (211, 54, 130), (42, 190, 180), (230, 120, 30), (200, 200, 210)]
+DIRECTIONS = [(1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1)]
+
+
+def shade(color, factor):
+    """`color` darkened (factor < 1) or lightened toward white (factor > 1)."""
+    if factor <= 1:
+        return tuple(int(c * factor) for c in color)
+    return tuple(int(c + (255 - c) * (factor - 1)) for c in color)
+
+
+class View:
+    """Projects grid points to the screen, seen from a fixed oblique angle."""
+
+    def __init__(self, width, height, size):
+        self.cx, self.cy = width / 2, height / 2
+        self.size = size
+        self.scale = min(width, height) * 0.55 / size
+        self.distance = size * 2.2
+        yaw, pitch = math.radians(random.uniform(20, 40)), math.radians(random.uniform(15, 30))
+        self.yaw = (math.cos(yaw), math.sin(yaw))
+        self.pitch = (math.cos(pitch), math.sin(pitch))
+
+    def project(self, p):
+        """Screen position, perspective factor and depth of grid point `p`."""
+        x, y, z = (c - (self.size - 1) / 2 for c in p)
+        x, z = x * self.yaw[0] - z * self.yaw[1], x * self.yaw[1] + z * self.yaw[0]
+        y, z = y * self.pitch[0] - z * self.pitch[1], y * self.pitch[1] + z * self.pitch[0]
+        f = self.distance / (self.distance + z)
+        return (self.cx + x * self.scale * f, self.cy - y * self.scale * f), f, z
+
+
+class Scene:
+    """The pipes grown so far, as drawable parts, and the growing pipe."""
+
+    def __init__(self, size, pipes):
+        self.size, self.pipes_left = size, pipes
+        self.used = set()
+        self.parts = []  # (depth, kind, data)
+        self.head = None
+
+    def _free(self, p):
+        return all(0 <= c < self.size for c in p) and p not in self.used
+
+    def _start_pipe(self):
+        free = [p for p in ((random.randrange(self.size), random.randrange(self.size),
+                             random.randrange(self.size)) for _ in range(50)) if self._free(p)]
+        if not free or self.pipes_left == 0:
+            return False
+        self.pipes_left -= 1
+        # Each pipe has a random length, so several colors share the scene.
+        self.head = {"pos": free[0], "dir": random.choice(DIRECTIONS),
+                     "color": random.choice(COLORS),
+                     "left": random.randint(self.size * 2, self.size * 6)}
+        self.used.add(free[0])
+        self.parts.append(("ball", free[0], self.head["color"], 1.0))
+        return True
+
+    def grow(self):
+        """Adds one segment. Returns False when the scene is complete."""
+        if self.head is None and not self._start_pipe():
+            return False
+        pos, direction, color = self.head["pos"], self.head["dir"], self.head["color"]
+        ahead = tuple(p + d for p, d in zip(pos, direction))
+        # Mostly straight; turn now and then, or when blocked.
+        self.head["left"] -= 1
+        if self.head["left"] == 0:
+            self.parts.append(("ball", pos, color, 1.0))  # end cap
+            self.head = None
+            return True
+        if not self._free(ahead) or random.random() < 0.2:
+            turns = [d for d in DIRECTIONS
+                     if self._free(tuple(p + c for p, c in zip(pos, d)))]
+            if not turns:
+                self.parts.append(("ball", pos, color, 1.0))  # end cap
+                self.head = None
+                return True
+            new = random.choice(turns)
+            if new != direction:
+                self.parts.append(("ball", pos, color, 1.0))  # joint
+            direction = new
+            ahead = tuple(p + d for p, d in zip(pos, direction))
+        self.parts.append(("pipe", (pos, ahead), color, None))
+        self.used.add(ahead)
+        self.head.update(pos=ahead, dir=direction)
+        return True
+
+
+def draw(screen, view, scene, background=(0, 0, 0)):
+    """Draws every part, back to front, as shaded lines and circles."""
+    screen.fill(background)
+    drawn = []
+    for kind, where, color, _ in scene.parts:
+        if kind == "pipe":
+            (a, fa, za), (b, fb, zb) = view.project(where[0]), view.project(where[1])
+            drawn.append(((za + zb) / 2, kind, (a, b, (fa + fb) / 2), color))
+        else:
+            p, f, z = view.project(where)
+            drawn.append((z - 0.01, kind, (p, f), color))
+    radius = view.scale * 0.2
+    for _, kind, geometry, color in sorted(drawn, key=lambda d: -d[0]):
+        if kind == "pipe":
+            a, b, f = geometry
+            r = radius * f
+            # Offset toward the light (up-left) so the highlight sits off center.
+            dx, dy = b[0] - a[0], b[1] - a[1]
+            length = math.hypot(dx, dy) or 1
+            nx, ny = -dy / length, dx / length
+            if nx + ny > 0:
+                nx, ny = -nx, -ny
+            for width, offset, factor in ((1.0, 0, 0.45), (0.8, 0.08, 0.75),
+                                          (0.5, 0.18, 1.0), (0.18, 0.3, 1.45)):
+                ox, oy = nx * r * offset, ny * r * offset
+                pygame.draw.line(screen, shade(color, factor), (a[0] + ox, a[1] + oy),
+                                 (b[0] + ox, b[1] + oy), max(1, round(2 * r * width)))
+        else:
+            p, f = geometry
+            r = radius * f * 1.25
+            for size, offset, factor in ((1.0, 0, 0.45), (0.85, 0.08, 0.75),
+                                         (0.55, 0.2, 1.0), (0.2, 0.38, 1.5)):
+                pygame.draw.circle(screen, shade(color, factor),
+                                   (p[0] - r * offset, p[1] - r * offset), max(1, r * size))
+
+
+def main():
+    args = options()
+    pygame.display.init()
+    screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
+    pygame.display.set_caption("pipes3d")
+    pygame.mouse.set_visible(False)
+    clock = pygame.time.Clock()
+
+    scene, view, pause = Scene(args.size, args.pipes), None, 0
+    view = View(*screen.get_size(), args.size)
+    while True:
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                return
+        if pause:
+            # The scene is complete: hold it for a moment, then start over.
+            pause -= 1
+            if pause == 0:
+                scene, view = Scene(args.size, args.pipes), View(*screen.get_size(), args.size)
+        elif not scene.grow():
+            pause = 3 * args.speed
+        draw(screen, view, scene, args.background)
+        pygame.display.flip()
+        clock.tick(args.speed)
+
+
+if __name__ == "__main__":
+    main()

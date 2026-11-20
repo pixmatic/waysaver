@@ -1,0 +1,36 @@
+#!/bin/sh
+THEME_NAME="Bonsai"
+THEME_DESCRIPTION="A bonsai tree growing, again and again, with an optional message."
+THEME_VERSION="1.1"
+THEME_REQUIRES="foot cbonsai"
+THEME_USAGE="bonsai [--message TEXT] [--background RRGGBB]"
+
+# Example: wayvoid 300 bonsai --message "Back soon" --background 0d1a0d
+#
+# Options:
+#   --message TEXT        a message next to the tree
+#   --background RRGGBB   background color; default 000000 (black)
+
+for dep in $THEME_REQUIRES; do
+    command -v "$dep" >/dev/null || { echo "$0: $dep is not installed" >&2; exit 1; }
+done
+
+fail() { echo "$0: $*" >&2; exit 2; }
+# Whether $1 is a color as RRGGBB (hex).
+is_rgb() { case $1 in [0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]) ;; *) return 1 ;; esac; }
+
+message= background=000000
+while [ $# -gt 0 ]; do
+    [ $# -ge 2 ] || case $1 in --*) fail "$1 needs a value" ;; esac
+    case $1 in
+        --message) message=$2 ;;
+        --background) background=$2 ;;
+        *) fail "unknown option: $1" ;;
+    esac
+    shift 2
+done
+is_rgb "$background" || fail "--background must be RRGGBB, e.g. 101828"
+
+# -l: watch it grow; -i: grow a new one when finished.
+exec foot -o colors-dark.background="$background" --fullscreen \
+    sh -c 'sleep 0.3; exec cbonsai -l -i ${1:+-m "$1"}' sh "$message"
