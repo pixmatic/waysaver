@@ -7,11 +7,16 @@
 //! Without the `multimonitor` feature there is a single overlay with no
 //! output set (the compositor picks one). With it, `outputs` tracks every
 //! `wl_output` and each one gets its own overlay.
+//!
+//! With the `command` feature (`theme.rs`), the overlays can turn transparent
+//! to show an external program running underneath.
 
 #[cfg(feature = "ignore-mouse")]
 mod input;
 #[cfg(feature = "multimonitor")]
 mod outputs;
+#[cfg(feature = "command")]
+mod theme;
 
 use std::{
     fs::File,
@@ -53,7 +58,9 @@ use wayland_protocols_wlr::layer_shell::v1::client::{
 use crate::cli::Config;
 use crate::logging::{INFO, WARNING, log};
 
-/// A black overlay covering one output.
+/// A layer surface covering one output: normally the black overlay on top
+/// of everything; with `command --backdrop`, also a black backdrop below the
+/// command's window.
 struct Overlay {
     /// The output it covers, to find the overlay when that output is unplugged.
     #[cfg(feature = "multimonitor")]
@@ -61,9 +68,25 @@ struct Overlay {
     surface: WlSurface,
     viewport: WpViewport,
     layer: ZwlrLayerSurfaceV1,
+    /// A `--backdrop` surface (always black, never takes the keyboard).
+    #[cfg(feature = "command")]
+    backdrop: bool,
+    /// Whether the first `configure` was handled; only then may a different
+    /// buffer be attached (when the command starts or stops).
+    #[cfg(feature = "command")]
+    configured: bool,
 }
 
 impl Overlay {
+    /// The output this overlay was created for (`None`: compositor's choice).
+    #[cfg(feature = "command")]
+    fn target(&self) -> Option<WlOutput> {
+        #[cfg(feature = "multimonitor")]
+        return self.output.clone();
+        #[cfg(not(feature = "multimonitor"))]
+        None
+    }
+
     /// Destroys the protocol objects. Order matters: layer-shell requires the
     /// role object (layer surface) to go before its `wl_surface`.
     fn destroy(self) {
@@ -98,12 +121,15 @@ pub struct State {
     /// One per covered output while blanked; empty otherwise. May also be
     /// empty while blanked if the compositor closed them all.
     overlays: Vec<Overlay>,
-    /// Every advertised output, with its registry name (for hotplug removal).
+    /// Every advertised output (for hotplug and, with `command`, its name).
     #[cfg(feature = "multimonitor")]
-    outputs: Vec<(u32, WlOutput)>,
+    outputs: Vec<outputs::Output>,
     /// `--ignore-mouse` state and the extra input objects it needs.
     #[cfg(feature = "ignore-mouse")]
     ignore_mouse: input::IgnoreMouse,
+    /// The external command, its children and the transparent buffer.
+    #[cfg(feature = "command")]
+    theme: theme::Theme,
 }
 
 /// Connects to the compositor and binds every required global.
@@ -126,7 +152,8 @@ pub fn connect(config: &Config) -> Result<(EventQueue<State>, State), String> {
         viewporter: bind(&globals, &qh, 1..=1)?,
         // v1 is enough: `Exclusive` (1) matches the old boolean "true".
         layer_shell: bind(&globals, &qh, 1..=4)?,
-        buffer: black_buffer(&shm, &qh)?,
+        // ARGB8888: alpha 0xFF, RGB all zero.
+        buffer: pixel_buffer(&shm, &qh, 0xFF00_0000)?,
         pointer: None,
         blanked: false,
         overlays: Vec::new(),
@@ -134,6 +161,8 @@ pub fn connect(config: &Config) -> Result<(EventQueue<State>, State), String> {
         outputs: outputs::bind_all(&globals, &qh),
         #[cfg(feature = "ignore-mouse")]
         ignore_mouse: input::IgnoreMouse::new(config.ignore_mouse),
+        #[cfg(feature = "command")]
+        theme: theme::Theme::new(config, &shm, &qh)?,
     };
     Ok((queue, state))
 }
@@ -180,66 +209,149 @@ impl State {
         }
     }
 
-    /// Blanks the screen: one overlay per target output.
+    /// Children's pidfds (`command`), to be polled by the event loop.
+    #[cfg(feature = "command")]
+    pub fn command_fds(&self) -> Vec<std::os::fd::BorrowedFd<'_>> {
+        theme::fds(self)
+    }
+
+    /// Called by the event loop when a child's pidfd is readable.
+    #[cfg(feature = "command")]
+    pub fn command_exited(&mut self) {
+        theme::reap(self);
+    }
+
+    /// Blanks the screen: covers every target output.
     fn show(&mut self, qh: &QueueHandle<Self>) {
         if self.blanked {
             return;
         }
         self.blanked = true;
         for output in self.targets() {
-            self.add_overlay(output, qh);
+            self.cover(output, qh);
         }
+        #[cfg(feature = "command")]
+        theme::start_all(self);
     }
 
-    /// Unblanks: destroys every overlay.
+    /// Unblanks: destroys every overlay (and stops the command).
     fn hide(&mut self) {
         self.blanked = false;
         for overlay in self.overlays.drain(..) {
             overlay.destroy();
         }
+        #[cfg(feature = "command")]
+        theme::stop_all(self);
+    }
+
+    /// Covers one output: its overlay (plus a backdrop with `command`).
+    fn cover(&mut self, output: Option<WlOutput>, qh: &QueueHandle<Self>) {
+        #[cfg(feature = "command")]
+        theme::add_backdrop(self, output.clone(), qh);
+        self.add_overlay(output, qh);
     }
 
     /// The outputs to cover: all known ones with `multimonitor`, otherwise a
     /// single `None` ("whichever output the compositor picks").
     fn targets(&self) -> Vec<Option<WlOutput>> {
         #[cfg(feature = "multimonitor")]
-        return self.outputs.iter().map(|(_, o)| Some(o.clone())).collect();
+        return self.outputs.iter().map(|o| Some(o.wl.clone())).collect();
         #[cfg(not(feature = "multimonitor"))]
         vec![None]
     }
 
-    /// Creates an overlay on `output`. Nothing is drawn yet: the compositor
-    /// first replies with a `configure` (handled below), and only then is the
-    /// buffer attached.
+    /// Adds the overlay for `output`: on the `overlay` layer, stacked above
+    /// everything (fullscreen windows included), with the keyboard grabbed so
+    /// the waking keypress reaches no application. With several overlays the
+    /// compositor focuses one of them.
     fn add_overlay(&mut self, output: Option<WlOutput>, qh: &QueueHandle<Self>) {
+        let overlay =
+            self.new_overlay(output, Layer::Overlay, KeyboardInteractivity::Exclusive, qh);
+        self.overlays.push(overlay);
+    }
+
+    /// Creates a full-output layer surface. Nothing is drawn yet: the
+    /// compositor first replies with a `configure` (handled below), and only
+    /// then is the buffer attached.
+    fn new_overlay(
+        &self,
+        output: Option<WlOutput>,
+        layer: Layer,
+        keyboard: KeyboardInteractivity,
+        qh: &QueueHandle<Self>,
+    ) -> Overlay {
         let surface = self.compositor.create_surface(qh, ());
         let viewport = self.viewporter.get_viewport(&surface, qh, ());
-        // The overlay layer is stacked above everything, fullscreen windows
-        // included. "wayvoid" is the namespace compositors may use in rules.
-        let layer = self.layer_shell.get_layer_surface(
+        // "wayvoid" is the namespace compositors may use in window rules.
+        let layer_surface = self.layer_shell.get_layer_surface(
             &surface,
             output.as_ref(),
-            Layer::Overlay,
+            layer,
             "wayvoid".into(),
             qh,
             (),
         );
         // Anchored to all edges with size 0x0 means "fill the output".
-        layer.set_anchor(Anchor::all());
+        layer_surface.set_anchor(Anchor::all());
         // -1: cover panels and bars instead of being pushed by them.
-        layer.set_exclusive_zone(-1);
-        // Grab the keyboard so the waking keypress reaches no application.
-        // With several overlays the compositor focuses one of them.
-        layer.set_keyboard_interactivity(KeyboardInteractivity::Exclusive);
+        layer_surface.set_exclusive_zone(-1);
+        layer_surface.set_keyboard_interactivity(keyboard);
         // Initial commit without a buffer asks the compositor to configure us.
         surface.commit();
-        self.overlays.push(Overlay {
+        Overlay {
             #[cfg(feature = "multimonitor")]
             output,
             surface,
             viewport,
-            layer,
-        });
+            layer: layer_surface,
+            #[cfg(feature = "command")]
+            backdrop: false,
+            #[cfg(feature = "command")]
+            configured: false,
+        }
+    }
+
+    /// The buffer an overlay shows: black, unless `command` says otherwise.
+    fn overlay_buffer(&self, overlay: &Overlay) -> &WlBuffer {
+        #[cfg(feature = "command")]
+        if let Some(buffer) = theme::buffer_for(self, overlay) {
+            return buffer;
+        }
+        #[cfg(not(feature = "command"))]
+        let _ = overlay;
+        &self.buffer
+    }
+
+    /// Re-attaches the right buffer to the configured overlays of `target`,
+    /// after its command started or stopped.
+    #[cfg(feature = "command")]
+    fn refresh_overlays(&self, target: Option<&WlOutput>) {
+        for overlay in &self.overlays {
+            if overlay.configured && overlay.target().as_ref() == target {
+                overlay
+                    .surface
+                    .attach(Some(self.overlay_buffer(overlay)), 0, 0);
+                // A new buffer must be damaged for the compositor to redraw.
+                overlay.surface.damage(0, 0, i32::MAX, i32::MAX);
+                overlay.surface.commit();
+            }
+        }
+    }
+
+    /// The name of `target` (e.g. "HDMI-A-1"), exported to the command.
+    #[cfg(feature = "command")]
+    fn output_name(&self, target: Option<&WlOutput>) -> Option<String> {
+        #[cfg(feature = "multimonitor")]
+        return self
+            .outputs
+            .iter()
+            .find(|o| Some(&o.wl) == target)
+            .and_then(|o| o.name.clone());
+        #[cfg(not(feature = "multimonitor"))]
+        {
+            let _ = target;
+            None
+        }
     }
 
     /// Destroys the overlays matching `pred` (blanked state is unchanged).
@@ -271,15 +383,15 @@ where
         .map_err(|e| format!("{}: {e}", I::interface().name))
 }
 
-/// Creates a 1x1 ARGB8888 buffer holding a single opaque black pixel.
+/// Creates a 1x1 ARGB8888 buffer holding a single `argb` pixel.
 /// The memfd can be dropped on return: `create_pool` duplicates the fd when
 /// queueing the request, and the compositor maps the memory on its side.
-fn black_buffer(shm: &WlShm, qh: &QueueHandle<State>) -> Result<WlBuffer, String> {
+fn pixel_buffer(shm: &WlShm, qh: &QueueHandle<State>, argb: u32) -> Result<WlBuffer, String> {
     let fd = rustix::fs::memfd_create("wayvoid", rustix::fs::MemfdFlags::CLOEXEC)
         .map_err(|e| format!("memfd_create: {e}"))?;
     let mut file = File::from(fd);
-    // ARGB8888 is a native-endian 32-bit value: alpha 0xFF, RGB all zero.
-    file.write_all(&0xFF00_0000u32.to_ne_bytes())
+    // ARGB8888 is a native-endian 32-bit value.
+    file.write_all(&argb.to_ne_bytes())
         .map_err(|e| format!("write to memfd: {e}"))?;
     // Pool of 4 bytes; buffer at offset 0, 1x1 pixels, stride 4 bytes.
     let pool = shm.create_pool(file.as_fd(), 4, qh, ());
@@ -340,9 +452,10 @@ impl Dispatch<ZwlrLayerSurfaceV1, ()> for State {
         _: &QueueHandle<Self>,
     ) {
         // Ignore events from an already destroyed overlay.
-        let Some(overlay) = state.overlays.iter().find(|o| o.layer == *layer) else {
+        let Some(i) = state.overlays.iter().position(|o| o.layer == *layer) else {
             return;
         };
+        let overlay = &state.overlays[i];
         match event {
             zwlr_layer_surface_v1::Event::Configure {
                 serial,
@@ -355,8 +468,14 @@ impl Dispatch<ZwlrLayerSurfaceV1, ()> for State {
                 // destination unset. Never expected with all-edge anchoring.
                 let size = |v: u32| if v == 0 { -1 } else { v as i32 };
                 overlay.viewport.set_destination(size(width), size(height));
-                overlay.surface.attach(Some(&state.buffer), 0, 0);
+                overlay
+                    .surface
+                    .attach(Some(state.overlay_buffer(overlay)), 0, 0);
                 overlay.surface.commit();
+                #[cfg(feature = "command")]
+                {
+                    state.overlays[i].configured = true;
+                }
             }
             // The compositor dropped this surface (e.g. its output is gone).
             // Only this overlay goes; we stay blanked, and the next

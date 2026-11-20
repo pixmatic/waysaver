@@ -8,6 +8,8 @@
 //! A single thread blocks in poll() on all sockets: 0% CPU while idle.
 
 mod cli;
+#[cfg(feature = "command")]
+mod command;
 mod inhibit;
 mod logging;
 mod wayland;
@@ -95,10 +97,13 @@ fn run(config: &cli::Config) -> Result<(), String> {
             wayland::dispatch(&mut queue, &mut state)?;
             continue;
         };
-        // 3. Sleep until any socket is readable. This inner block exists so the
-        //    fd borrows (from `guard` and `sources`) end before `guard` is
-        //    consumed by `read_events` below.
+        // 3. Sleep until any fd is readable: Wayland, then the D-Bus sources,
+        //    then (with `command`) the children's pidfds. This inner block
+        //    exists so the fd borrows (from `guard`, `sources` and `state`) end
+        //    before `guard` is consumed and `state` mutated below.
         let wl_ready;
+        #[cfg(feature = "command")]
+        let child_exited;
         {
             let wl_fd = guard.connection_fd();
             // SAFETY: each fd belongs to a source's channel, which outlives this block.
@@ -108,6 +113,10 @@ fn run(config: &cli::Config) -> Result<(), String> {
                 .collect();
             let mut fds = vec![PollFd::new(&wl_fd, PollFlags::IN)];
             fds.extend(bus_fds.iter().map(|fd| PollFd::new(fd, PollFlags::IN)));
+            #[cfg(feature = "command")]
+            let child_fds = state.command_fds();
+            #[cfg(feature = "command")]
+            fds.extend(child_fds.iter().map(|fd| PollFd::new(fd, PollFlags::IN)));
             // No timeout: we only wake up for events, never on a timer.
             match poll(&mut fds, None) {
                 Ok(_) => {}
@@ -117,7 +126,15 @@ fn run(config: &cli::Config) -> Result<(), String> {
             }
             // Any revents (IN, HUP, ERR) means "go read": errors surface there.
             wl_ready = !fds[0].revents().is_empty();
-            ready = fds[1..].iter().map(|fd| !fd.revents().is_empty()).collect();
+            let bus_end = 1 + bus_fds.len();
+            ready = fds[1..bus_end]
+                .iter()
+                .map(|fd| !fd.revents().is_empty())
+                .collect();
+            #[cfg(feature = "command")]
+            {
+                child_exited = fds[bus_end..].iter().any(|fd| !fd.revents().is_empty());
+            }
         }
 
         // 4. Read Wayland events if there are any (dropping an unread guard
@@ -126,5 +143,11 @@ fn run(config: &cli::Config) -> Result<(), String> {
             wayland::read_events(guard)?;
         }
         wayland::dispatch(&mut queue, &mut state)?;
+
+        // 5. `command`: reap exited children (restart them or go black).
+        #[cfg(feature = "command")]
+        if child_exited {
+            state.command_exited();
+        }
     }
 }
