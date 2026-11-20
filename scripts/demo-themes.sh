@@ -82,7 +82,7 @@ run() {
     fi
     [[ $theme != blank ]] && theme=$THEMES/$theme
     printf '▶ %-18s starts in %ss, shown for %ss. Hands off...\n' "$name" "$IDLE" "$SHOW"
-    "$W" "$IDLE" "$theme" "$@" > "$LOGS/$name.out" 2> "$LOGS/$name.log" &
+    "$W" -l info "$IDLE" "$theme" "$@" > "$LOGS/$name.out" 2> "$LOGS/$name.log" &
     pid=$!
     sleep $((IDLE + SHOW))
     kill "$pid" 2>/dev/null
@@ -140,7 +140,7 @@ if [[ -z $ONLY || systemd-inhibit == *"$ONLY"* ]]; then
         printf '▶ %-18s inhibited for %ss: must NOT blank until then...\n' systemd-inhibit "$hold"
         systemd-inhibit --what=idle --who=wayvoid-demo --why=test sleep "$hold" &
         sleep 0.5
-        "$W" "$IDLE" blank 2> "$LOGS/systemd-inhibit.log" &
+        "$W" -l info "$IDLE" blank 2> "$LOGS/systemd-inhibit.log" &
         pid=$!
         sleep $((hold - 1))
         early=$(grep -c "screen blanked" "$LOGS/systemd-inhibit.log")

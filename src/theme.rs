@@ -6,6 +6,10 @@
 //! through a pidfd per child, polled by the main event loop: no SIGCHLD
 //! handler, no threads, no timers.
 //!
+//! The children's output goes through pipes, polled the same way: at the
+//! `debug` log level every line is logged; otherwise stdout is discarded and
+//! only the last lines of stderr are kept, to explain a theme that fails.
+//!
 //! A theme is any program, run directly (no shell). It is responsible for
 //! showing itself fullscreen on its output, e.g. `mpv --fs --fs-screen-name=...`;
 //! to use `$WAYVOID_OUTPUT` in its arguments, wrap it in `sh -c '...'`.
@@ -18,6 +22,9 @@
 //! off, `theme_off.rs` replaces this file with the same API, empty.
 
 use std::{
+    collections::VecDeque,
+    fs::File,
+    io::{ErrorKind, Read},
     os::{
         fd::{AsFd, BorrowedFd, OwnedFd},
         unix::process::CommandExt,
@@ -30,7 +37,7 @@ use std::{
 use rustix::process::{Pid, PidfdFlags, Signal};
 use wayland_client::protocol::wl_output::WlOutput;
 
-use crate::logging::{ERR, INFO, WARNING, log};
+use crate::logging::{DEBUG, ERR, INFO, WARNING, enabled, log};
 
 /// The feature is compiled in (the stub says `false`).
 pub const ENABLED: bool = true;
@@ -133,6 +140,75 @@ fn find_theme(dir: Option<&Path>, name: &str) -> Option<String> {
 /// timestamps taken at spawn and at exit; nothing waits on it.
 const MIN_LIFETIME: Duration = Duration::from_secs(2);
 
+/// Longest output line kept whole; longer ones are split.
+const MAX_LINE: usize = 4096;
+/// How many of stderr's last lines are kept to explain a failure.
+const TAIL_LINES: usize = 3;
+
+/// One of a child's output streams, read line by line without blocking.
+struct Stream {
+    file: File,
+    /// The end of the last read, still waiting for its newline.
+    partial: Vec<u8>,
+    /// False once every writer closed it (the child and anything it spawned).
+    open: bool,
+}
+
+impl Stream {
+    /// Takes the read end of a pipe, made non-blocking for the event loop.
+    fn new(fd: OwnedFd) -> Self {
+        // A blocking read could hang the whole daemon: if O_NONBLOCK can't
+        // be set, the stream is ignored (treated as closed) instead.
+        let open = rustix::fs::fcntl_getfl(&fd)
+            .and_then(|flags| rustix::fs::fcntl_setfl(&fd, flags | rustix::fs::OFlags::NONBLOCK))
+            .is_ok();
+        Self {
+            file: File::from(fd),
+            partial: Vec::new(),
+            open,
+        }
+    }
+
+    /// Reads what is available and returns the complete lines.
+    fn read_lines(&mut self) -> Vec<String> {
+        let mut lines = Vec::new();
+        let mut buf = [0; 4096];
+        // Bounded, so a chatty child can't starve the event loop: poll()
+        // reports the rest right away.
+        for _ in 0..16 {
+            if !self.open {
+                break;
+            }
+            match self.file.read(&mut buf) {
+                Ok(0) => self.open = false,
+                Ok(n) => self.partial.extend_from_slice(&buf[..n]),
+                Err(e) if e.kind() == ErrorKind::WouldBlock => break,
+                Err(e) if e.kind() == ErrorKind::Interrupted => continue,
+                Err(_) => self.open = false,
+            }
+            while let Some(end) = self.partial.iter().position(|&b| b == b'\n') {
+                let line: Vec<u8> = self.partial.drain(..=end).collect();
+                lines.push(text(&line[..end]));
+            }
+            if self.partial.len() >= MAX_LINE {
+                lines.push(text(&std::mem::take(&mut self.partial)));
+            }
+        }
+        // The last line may lack its newline.
+        if !self.open && !self.partial.is_empty() {
+            lines.push(text(&std::mem::take(&mut self.partial)));
+        }
+        lines
+    }
+}
+
+/// Output bytes as a log-friendly line.
+fn text(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes)
+        .trim_end_matches('\r')
+        .to_string()
+}
+
 /// A running (or terminating) child.
 struct Running {
     process: Child,
@@ -140,7 +216,43 @@ struct Running {
     pidfd: OwnedFd,
     /// The output it was started for (`None` in single-monitor builds).
     target: Option<WlOutput>,
+    /// "theme on HDMI-A-1", or just "theme": how the log refers to it.
+    label: String,
     started: Instant,
+    /// Its stdout, only read at the `debug` level (discarded otherwise).
+    stdout: Option<Stream>,
+    stderr: Option<Stream>,
+    /// stderr's last lines, to explain a failure.
+    tail: VecDeque<String>,
+}
+
+impl Running {
+    /// Reads whatever the child wrote: each line is logged at the `debug`
+    /// level, and stderr's last lines are kept.
+    fn read_output(&mut self) {
+        if let Some(stdout) = &mut self.stdout {
+            for line in stdout.read_lines() {
+                log(DEBUG, &format!("{} (stdout): {line}", self.label));
+            }
+        }
+        if let Some(stderr) = &mut self.stderr {
+            for line in stderr.read_lines() {
+                log(DEBUG, &format!("{} (stderr): {line}", self.label));
+                if !line.trim().is_empty() {
+                    if self.tail.len() == TAIL_LINES {
+                        self.tail.pop_front();
+                    }
+                    self.tail.push_back(line.chars().take(200).collect());
+                }
+            }
+        }
+    }
+
+    /// The fds to poll: the pidfd, and the output pipes still open.
+    fn fds(&self) -> impl Iterator<Item = BorrowedFd<'_>> {
+        let pipes = [&self.stdout, &self.stderr].into_iter().flatten();
+        std::iter::once(self.pidfd.as_fd()).chain(pipes.filter(|s| s.open).map(|s| s.file.as_fd()))
+    }
 }
 
 /// A child that exited on its own while the screen was still blanked.
@@ -160,6 +272,7 @@ pub struct Runner {
 
 impl Runner {
     pub fn new(argv: &[String]) -> Self {
+        log(DEBUG, &format!("theme: {argv:?}"));
         Self {
             argv: argv.to_vec(),
             live: Vec::new(),
@@ -177,7 +290,17 @@ impl Runner {
     /// the child is running.
     pub fn start(&mut self, target: Option<WlOutput>, name: Option<&str>) -> bool {
         let mut cmd = std::process::Command::new(&self.argv[0]);
-        cmd.args(&self.argv[1..]).stdin(Stdio::null());
+        // stderr is always read (its last lines explain failures); stdout
+        // only when it will be logged.
+        let stdout = if enabled(DEBUG) {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        };
+        cmd.args(&self.argv[1..])
+            .stdin(Stdio::null())
+            .stdout(stdout)
+            .stderr(Stdio::piped());
         if let Some(name) = name {
             cmd.env("WAYVOID_OUTPUT", name);
         }
@@ -191,7 +314,7 @@ impl Runner {
                     .map_err(Into::into)
             });
         }
-        let process = match cmd.spawn() {
+        let mut process = match cmd.spawn() {
             Ok(process) => process,
             Err(e) => {
                 log(ERR, &format!("theme {:?}: {e}", self.argv[0]));
@@ -205,23 +328,26 @@ impl Runner {
                 // Without a pidfd we can't notice its exit: don't keep it.
                 log(ERR, &format!("pidfd_open: {e}"));
                 let _ = rustix::process::kill_process_group(pid, Signal::KILL);
-                let mut process = process;
                 let _ = process.wait();
                 return false;
             }
         };
-        log(
-            INFO,
-            &format!(
-                "theme started on {} (pid {pid})",
-                name.unwrap_or("the screen")
-            ),
-        );
+        let label = match name {
+            Some(name) => format!("theme on {name}"),
+            None => "theme".to_string(),
+        };
+        log(INFO, &format!("{label} started (pid {pid})"));
+        let stdout = process.stdout.take().map(|s| Stream::new(s.into()));
+        let stderr = process.stderr.take().map(|s| Stream::new(s.into()));
         self.live.push(Running {
             process,
             pidfd,
             target,
+            label,
             started: Instant::now(),
+            stdout,
+            stderr,
+            tail: VecDeque::new(),
         });
         true
     }
@@ -248,22 +374,35 @@ impl Runner {
 
     fn terminate(&mut self, running: Running) {
         let pid = Pid::from_child(&running.process);
+        log(
+            DEBUG,
+            &format!("{}: SIGTERM to process group {pid}", running.label),
+        );
         // ESRCH (already gone) is fine: the pidfd will report the exit.
         let _ = rustix::process::kill_process_group(pid, Signal::TERM);
         self.dying.push(running);
     }
 
-    /// Every child's pidfd, to be polled for readability.
+    /// The fds to poll: every child's pidfd and open output pipes.
     pub fn fds(&self) -> impl Iterator<Item = BorrowedFd<'_>> {
-        self.live.iter().chain(&self.dying).map(|r| r.pidfd.as_fd())
+        self.live.iter().chain(&self.dying).flat_map(Running::fds)
     }
 
-    /// Reaps the children that exited. Terminated ones are just dropped; live
-    /// ones that exited on their own are logged and returned, so the caller
-    /// can restart them or fall back to black.
+    /// Reads the children's output, then reaps the ones that exited.
+    /// Terminated ones are just dropped; live ones that exited on their own
+    /// are logged and returned, so the caller can restart them or fall back
+    /// to black.
     pub fn reap(&mut self) -> Vec<Exited> {
-        self.dying
-            .retain_mut(|r| !matches!(r.process.try_wait(), Ok(Some(_))));
+        for running in self.live.iter_mut().chain(&mut self.dying) {
+            running.read_output();
+        }
+        self.dying.retain_mut(|r| match r.process.try_wait() {
+            Ok(Some(status)) => {
+                log(DEBUG, &format!("{} ended ({status})", r.label));
+                false
+            }
+            _ => true,
+        });
         let mut exited = Vec::new();
         let mut i = 0;
         while i < self.live.len() {
@@ -272,13 +411,21 @@ impl Runner {
                 continue;
             };
             let running = self.live.swap_remove(i);
+            let label = &running.label;
             let restart = running.started.elapsed() >= MIN_LIFETIME;
             if restart {
-                log(INFO, &format!("theme exited ({status}), restarting"));
+                log(INFO, &format!("{label} exited ({status}), restarting"));
             } else {
+                // Its last words usually say why (e.g. a bad option).
+                let said = Vec::from(running.tail.clone()).join(" | ");
+                let said = if said.is_empty() {
+                    String::new()
+                } else {
+                    format!(": {said}")
+                };
                 log(
                     WARNING,
-                    &format!("theme exited too soon ({status}), not restarting"),
+                    &format!("{label} exited too soon ({status}), not restarting{said}"),
                 );
             }
             exited.push(Exited {

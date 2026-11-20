@@ -17,7 +17,7 @@ use wayland_client::{
 };
 
 use super::{State, theme};
-use crate::logging::{INFO, log};
+use crate::logging::{DEBUG, INFO, log};
 
 /// Highest `wl_output` version we bind: v3 adds `release` (to free the
 /// object on unplug), v4 the `name` event (exported to `theme` children).
@@ -136,6 +136,7 @@ impl Dispatch<WlOutput, ()> for State {
     ) {
         match event {
             wl_output::Event::Name { name } => {
+                log(DEBUG, &format!("output name: {name}"));
                 if let Some(output) = state.outputs.list.iter_mut().find(|o| o.wl == *wl) {
                     output.name = Some(name);
                 }

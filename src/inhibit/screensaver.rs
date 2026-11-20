@@ -20,7 +20,7 @@ use super::{
     InhibitSource,
     bus::{self, DBUS},
 };
-use crate::logging::{INFO, log};
+use crate::logging::{DEBUG, INFO, log};
 
 pub const SERVICE: &str = "org.freedesktop.ScreenSaver";
 
@@ -57,6 +57,7 @@ impl ScreenSaver {
         if reply.read1::<u32>() != Ok(1) {
             return Err(format!("{SERVICE} is already owned by another program"));
         }
+        log(DEBUG, &format!("owning {SERVICE} on the session bus"));
 
         // Be told when bus clients disconnect, to drop their inhibitors. This
         // also reports unrelated name changes on the bus; we filter them out.
@@ -85,6 +86,10 @@ impl ScreenSaver {
                     // there to avoid an unwrap.
                     let owner = msg.sender().map(|s| s.to_string()).unwrap_or_default();
                     let ours = self.is_own_theme(&owner);
+                    log(
+                        DEBUG,
+                        &format!("Inhibit({app:?}, {reason:?}) from {owner} -> cookie {cookie}"),
+                    );
                     if ours {
                         log(
                             INFO,
@@ -106,12 +111,23 @@ impl ScreenSaver {
             (Some(SERVICE), Some("UnInhibit")) => match msg.read1::<u32>() {
                 // Unknown cookies are accepted silently (already released).
                 Ok(cookie) => {
+                    log(DEBUG, &format!("UnInhibit({cookie})"));
                     self.remove(|i| i.cookie == cookie);
                     msg.method_return()
                 }
                 Err(_) => error(msg, "InvalidArgs", c"expected (cookie)"),
             },
-            _ => error(msg, "UnknownMethod", c"method not supported by wayvoid"),
+            _ => {
+                log(
+                    DEBUG,
+                    &format!(
+                        "unsupported call: {:?}.{:?}",
+                        iface.as_deref(),
+                        member.as_deref()
+                    ),
+                );
+                error(msg, "UnknownMethod", c"method not supported by wayvoid")
+            }
         };
         // Callers may flag that they don't want a reply.
         if !msg.get_no_reply() {
@@ -128,6 +144,12 @@ impl ScreenSaver {
             return;
         }
         if let Ok((name, _, "")) = msg.read3::<&str, &str, &str>() {
+            if self.inhibitors.iter().any(|i| i.owner == name) {
+                log(
+                    DEBUG,
+                    &format!("{name} left the bus: dropping its inhibitors"),
+                );
+            }
             self.remove(|i| i.owner == name);
         }
     }

@@ -54,7 +54,7 @@ use wayland_protocols_wlr::layer_shell::v1::client::{
 };
 
 use crate::cli::Config;
-use crate::logging::{INFO, WARNING, log};
+use crate::logging::{DEBUG, INFO, WARNING, log};
 
 /// A layer surface covering one output: normally the black overlay on top
 /// of everything (`theme` may add others, e.g. backdrops).
@@ -174,6 +174,7 @@ impl State {
     pub fn set_inhibited(&mut self, inhibited: bool, qh: &QueueHandle<Self>) {
         if inhibited {
             if let Some(notification) = self.notification.take() {
+                log(DEBUG, "inhibited: idle notification destroyed");
                 notification.destroy();
                 // An inhibitor may arrive while blanked (e.g. a video started
                 // remotely): with the notification gone no `resumed` would
@@ -186,6 +187,10 @@ impl State {
                 self.notifier
                     .get_idle_notification(self.timeout_ms, &self.seat, qh, ());
             self.notification = Some(notification);
+            log(
+                DEBUG,
+                &format!("idle notification created ({} ms)", self.timeout_ms),
+            );
         }
     }
 
@@ -260,6 +265,7 @@ impl State {
         layer_surface.set_keyboard_interactivity(keyboard);
         // Initial commit without a buffer asks the compositor to configure us.
         surface.commit();
+        log(DEBUG, &format!("overlay created on the {layer:?} layer"));
         Overlay {
             output,
             surface,
@@ -298,9 +304,14 @@ where
     I: Proxy + 'static,
     State: Dispatch<I, ()>,
 {
-    globals
+    let proxy: I = globals
         .bind(qh, versions, ())
-        .map_err(|e| format!("{}: {e}", I::interface().name))
+        .map_err(|e| format!("{}: {e}", I::interface().name))?;
+    log(
+        DEBUG,
+        &format!("bound {} v{}", I::interface().name, proxy.version()),
+    );
+    Ok(proxy)
 }
 
 /// Creates a 1x1 ARGB8888 buffer holding a single `argb` pixel.
@@ -345,6 +356,7 @@ impl Dispatch<ExtIdleNotificationV1, ()> for State {
             ext_idle_notification_v1::Event::Resumed => {
                 // `--ignore-mouse`: the overlays decide when to wake instead.
                 if input::defers_resume(state) {
+                    log(DEBUG, "resumed: ignored (--ignore-mouse)");
                     return;
                 }
                 if state.blanked {
@@ -379,6 +391,7 @@ impl Dispatch<ZwlrLayerSurfaceV1, ()> for State {
                 width,
                 height,
             } => {
+                log(DEBUG, &format!("overlay configured: {width}x{height}"));
                 // The ack must precede the commit that applies the new size.
                 overlay.layer.ack_configure(serial);
                 // A 0 size would be a viewporter protocol error; -1 leaves the
@@ -420,6 +433,7 @@ impl Dispatch<WlSeat, ()> for State {
         else {
             return;
         };
+        log(DEBUG, &format!("seat capabilities: {caps:?}"));
         if caps.contains(wl_seat::Capability::Pointer) && state.pointer.is_none() {
             state.pointer = Some(seat.get_pointer(qh, ()));
         }
@@ -440,7 +454,10 @@ impl Dispatch<WlPointer, ()> for State {
         _: &QueueHandle<Self>,
     ) {
         match event {
-            wl_pointer::Event::Enter { serial, .. } => pointer.set_cursor(serial, None, 0, 0),
+            wl_pointer::Event::Enter { serial, .. } => {
+                log(DEBUG, "pointer entered an overlay: cursor hidden");
+                pointer.set_cursor(serial, None, 0, 0);
+            }
             event => input::pointer_event(state, event),
         }
     }

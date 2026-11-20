@@ -13,7 +13,7 @@ use dbus::{
 };
 
 use super::{InhibitSource, bus};
-use crate::logging::{INFO, log};
+use crate::logging::{DEBUG, INFO, log};
 
 /// Source name used in log messages.
 pub const NAME: &str = "logind";
@@ -59,6 +59,7 @@ impl Logind {
     /// Updates the state from a `BlockInhibited` value, a colon-separated list
     /// such as "idle:sleep:handle-lid-switch". Logs only actual changes.
     fn update(&mut self, blocked: &str) {
+        log(DEBUG, &format!("logind BlockInhibited: {blocked:?}"));
         let idle = blocked.split(':').any(|op| op == "idle");
         if idle != self.idle_blocked {
             self.idle_blocked = idle;

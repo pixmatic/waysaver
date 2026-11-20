@@ -53,6 +53,7 @@ Options (only those compiled in are accepted and shown by `--help`):
 |---|---|---|
 | `-h`, `--help` | | Show the help. |
 | `-V`, `--version` | | Show the version. |
+| `-l`, `--log-level LEVEL` | | What to log, from `0`/`none` to `4`/`debug` (see [Logs](#logs)); default `warning`. |
 | `--ignore-mouse` | `ignore-mouse` | Don't wake up on mouse motion. |
 | `--backdrop` | `theme` | Black background below the theme while it starts (see [notes](#how-themes-work)). |
 
@@ -263,14 +264,31 @@ systemctl --user enable --now wayvoid.service
 
 ## Logs
 
-wayvoid only prints state changes and errors to stderr: started, blanked, restored, inhibitors, monitors, theme processes. Under systemd they go to the journal with proper priorities:
+wayvoid logs to stderr. How much is set with `-l`/`--log-level`, by number or name:
+
+| Level | Shows |
+|---|---|
+| `0`, `none` | Nothing at all. |
+| `1`, `error` | Fatal errors, and themes that can't be started. |
+| `2`, `warning` | Also problems that don't stop it: a D-Bus source unavailable, a theme that fails right away (with its last error lines). **The default.** |
+| `3`, `info` | Also every change: blanked, restored, inhibited and released (and by whom), monitors, themes started and restarted. |
+| `4`, `debug` | Everything it does (protocols bound, idle notifications, overlays, D-Bus calls, signals sent to themes...) plus **each line the theme prints**, on stdout or stderr. |
+
+```sh
+wayvoid -l info 300 matrix
+wayvoid --log-level=debug 300 marquee --color pink   # see why a theme fails
+```
+
+Below `debug`, a theme's stdout is discarded; its stderr is read only to report why it failed.
+
+Under systemd the messages go to the journal with their priority, so they can be filtered there too:
 
 ```sh
 journalctl --user -u wayvoid -f          # follow
 journalctl --user -u wayvoid -p warning  # warnings and errors only
 ```
 
-To see every Wayland message, run it with `WAYLAND_DEBUG=1`.
+To also see every Wayland message, run it with `WAYLAND_DEBUG=1`.
 
 ## Development
 

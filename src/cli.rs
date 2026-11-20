@@ -10,12 +10,14 @@
 //! A feature that is not compiled in has a stub with no options, so its
 //! flags are simply unknown, i.e. a usage error.
 
-use crate::{theme, wayland::input};
+use crate::{logging, theme, wayland::input};
 
 /// Settings for this run.
 pub struct Config {
     /// Idle timeout in milliseconds, as ext-idle-notify expects.
     pub timeout_ms: u32,
+    /// `-l`/`--log-level`: 0 (none) to 4 (debug), see logging.rs.
+    pub log_level: u8,
     // Feature options: empty structs (never read) when the feature is off.
     #[allow(dead_code)]
     pub ignore_mouse: input::Options,
@@ -36,6 +38,9 @@ pub enum Command {
 const BASE_OPTIONS: &[&str] = &[
     "  -h, --help          print this help and exit",
     "  -V, --version       print the version and exit",
+    "  -l, --log-level LEVEL",
+    "                      what to log: 0/none, 1/error, 2/warning (default),",
+    "                      3/info or 4/debug (everything, themes' output included)",
 ];
 
 /// Full usage text, listing only what is compiled into this binary.
@@ -60,6 +65,7 @@ pub fn usage() -> String {
 /// to be printed together with the usage text.
 pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Command, String> {
     let mut timeout_ms = None;
+    let mut log_level = logging::DEFAULT_LEVEL;
     let mut ignore_mouse = input::Options::default();
     let mut theme = theme::Options::default();
 
@@ -74,6 +80,13 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Command, String> 
         match arg.as_str() {
             "-h" | "--help" => return Ok(Command::Help),
             "-V" | "--version" => return Ok(Command::Version),
+            "-l" | "--log-level" => {
+                let value = args.next().ok_or(format!("{arg} needs a level"))?;
+                log_level = parse_log_level(&value)?;
+            }
+            _ if arg.starts_with("--log-level=") => {
+                log_level = parse_log_level(&arg["--log-level=".len()..])?;
+            }
             _ if ignore_mouse.option(&arg) || theme.option(&arg) => {}
             _ if arg.starts_with('-') => return Err(format!("unknown option: {arg}")),
             _ if timeout_ms.is_some() => return Err(format!("unexpected argument: {arg}")),
@@ -84,9 +97,17 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Command, String> 
     theme.validate()?;
     Ok(Command::Run(Config {
         timeout_ms,
+        log_level,
         ignore_mouse,
         theme,
     }))
+}
+
+/// A `--log-level` value, or the usage error explaining the valid ones.
+fn parse_log_level(value: &str) -> Result<u8, String> {
+    logging::parse_level(value).ok_or_else(|| {
+        format!("invalid log level: {value} (expected 0-4 or none, error, warning, info, debug)")
+    })
 }
 
 /// Seconds (> 0) to milliseconds. The upper bound comes from ext-idle-notify
@@ -152,6 +173,17 @@ mod tests {
             assert!(run(&["10", "20"]).is_err());
             assert!(matches!(run(&["10", "-h"]), Ok(Command::Help)));
         }
+    }
+
+    #[test]
+    fn log_level() {
+        let level = |args: &[&str]| config(run_blank(args)).map(|c| c.log_level);
+        assert_eq!(level(&["10"]), Some(2), "warning by default");
+        assert_eq!(level(&["-l", "4", "10"]), Some(4));
+        assert_eq!(level(&["--log-level", "info", "10"]), Some(3));
+        assert_eq!(level(&["--log-level=none", "10"]), Some(0));
+        assert!(run_blank(&["-l", "9", "10"]).is_err());
+        assert!(run(&["-l"]).is_err(), "a level is required");
     }
 
     #[test]

@@ -33,7 +33,7 @@ use std::{os::fd::BorrowedFd, process::ExitCode};
 
 use rustix::event::{PollFd, PollFlags, poll};
 
-use logging::{ERR, INFO, log};
+use logging::{DEBUG, ERR, INFO, log};
 
 fn main() -> ExitCode {
     let config = match cli::parse(std::env::args().skip(1)) {
@@ -53,6 +53,7 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    logging::set_level(config.log_level);
     match run(&config) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
@@ -74,6 +75,14 @@ fn run(config: &cli::Config) -> Result<(), String> {
     log(
         INFO,
         &format!("started, idle timeout {}s", config.timeout_ms / 1000),
+    );
+    log(
+        DEBUG,
+        &format!(
+            "log level {}, {} D-Bus inhibitor source(s)",
+            config.log_level,
+            sources.len()
+        ),
     );
 
     // `ready[i]` says whether `sources[i]` had data at the last poll(). The
