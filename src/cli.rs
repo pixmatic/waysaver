@@ -2,13 +2,17 @@
 //!
 //! Syntax: `wayvoid [OPTIONS] <idle-seconds>`. Optional features add their own
 //! options here behind `#[cfg(feature = "...")]`: a field in `Config`, a match
-//! arm in `parse` and a line in `USAGE_OPTIONS`. An option whose feature is not
+//! arm in `parse` and a `#[cfg]`'d line in `USAGE_OPTIONS`. An option whose feature is not
 //! compiled in is simply unknown, i.e. a usage error.
 
 /// Settings for this run.
 pub struct Config {
     /// Idle timeout in milliseconds, as ext-idle-notify expects.
     pub timeout_ms: u32,
+    /// `--ignore-mouse`: pointer motion doesn't unblank, only keys, buttons,
+    /// scrolling and touch do.
+    #[cfg(feature = "ignore-mouse")]
+    pub ignore_mouse: bool,
 }
 
 /// What the command line asks for.
@@ -23,8 +27,10 @@ pub enum Command {
 /// One line per option, in the order shown by `--help`.
 /// Feature-gated options append their own line.
 const USAGE_OPTIONS: &[&str] = &[
-    "  -h, --help       print this help and exit",
-    "  -V, --version    print the version and exit",
+    "  -h, --help          print this help and exit",
+    "  -V, --version       print the version and exit",
+    #[cfg(feature = "ignore-mouse")]
+    "      --ignore-mouse  don't wake up on mouse motion (keys, buttons, scroll and touch still do)",
 ];
 
 /// Full usage text, listing only the options compiled into this binary.
@@ -41,20 +47,25 @@ pub fn usage() -> String {
 /// to be printed together with the usage text.
 pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Command, String> {
     let mut timeout_ms = None;
+    #[cfg(feature = "ignore-mouse")]
+    let mut ignore_mouse = false;
     for arg in args {
         match arg.as_str() {
             "-h" | "--help" => return Ok(Command::Help),
             "-V" | "--version" => return Ok(Command::Version),
-            // Feature options go here, e.g.:
-            // #[cfg(feature = "x")]
-            // "--x" => x = true,
+            #[cfg(feature = "ignore-mouse")]
+            "--ignore-mouse" => ignore_mouse = true,
             _ if arg.starts_with('-') => return Err(format!("unknown option: {arg}")),
             _ if timeout_ms.is_some() => return Err(format!("unexpected argument: {arg}")),
             _ => timeout_ms = Some(parse_timeout_ms(&arg)?),
         }
     }
     let timeout_ms = timeout_ms.ok_or("missing <idle-seconds>")?;
-    Ok(Command::Run(Config { timeout_ms }))
+    Ok(Command::Run(Config {
+        timeout_ms,
+        #[cfg(feature = "ignore-mouse")]
+        ignore_mouse,
+    }))
 }
 
 /// Seconds (> 0) to milliseconds. The upper bound comes from ext-idle-notify
@@ -108,5 +119,23 @@ mod tests {
         assert!(matches!(run(&["-V"]), Ok(Command::Version)));
         assert!(run(&["--foo", "10"]).is_err());
         assert!(run(&["-5"]).is_err());
+    }
+
+    #[cfg(feature = "ignore-mouse")]
+    #[test]
+    fn ignore_mouse_flag() {
+        let flag = |args: &[&str]| match run(args) {
+            Ok(Command::Run(config)) => Some(config.ignore_mouse),
+            _ => None,
+        };
+        assert_eq!(flag(&["10"]), Some(false));
+        assert_eq!(flag(&["--ignore-mouse", "10"]), Some(true));
+        assert_eq!(flag(&["10", "--ignore-mouse"]), Some(true));
+    }
+
+    #[cfg(not(feature = "ignore-mouse"))]
+    #[test]
+    fn ignore_mouse_unknown_without_feature() {
+        assert!(run(&["--ignore-mouse", "10"]).is_err());
     }
 }

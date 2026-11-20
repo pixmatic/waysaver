@@ -48,7 +48,7 @@ fn main() -> ExitCode {
 /// Sets everything up and runs the event loop. Only returns on fatal errors.
 fn run(config: &cli::Config) -> Result<(), String> {
     // Wayland is mandatory; the D-Bus sources are best-effort.
-    let (mut queue, mut state) = wayland::connect(config.timeout_ms)?;
+    let (mut queue, mut state) = wayland::connect(config)?;
     let qh = queue.handle();
     let mut sources = inhibit::start();
 

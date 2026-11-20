@@ -17,3 +17,6 @@ default = []
 # One overlay per monitor, following hotplug (default: a single overlay on
 # the monitor the compositor picks).
 multimonitor = []
+# --ignore-mouse: pointer motion doesn't unblank; keys, buttons, scroll and
+# touch still do.
+ignore-mouse = []

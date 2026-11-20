@@ -8,6 +8,8 @@
 //! output set (the compositor picks one). With it, `outputs` tracks every
 //! `wl_output` and each one gets its own overlay.
 
+#[cfg(feature = "ignore-mouse")]
+mod input;
 #[cfg(feature = "multimonitor")]
 mod outputs;
 
@@ -48,6 +50,7 @@ use wayland_protocols_wlr::layer_shell::v1::client::{
     zwlr_layer_surface_v1::{self, Anchor, KeyboardInteractivity, ZwlrLayerSurfaceV1},
 };
 
+use crate::cli::Config;
 use crate::logging::{INFO, WARNING, log};
 
 /// A black overlay covering one output.
@@ -98,11 +101,14 @@ pub struct State {
     /// Every advertised output, with its registry name (for hotplug removal).
     #[cfg(feature = "multimonitor")]
     outputs: Vec<(u32, WlOutput)>,
+    /// `--ignore-mouse` state and the extra input objects it needs.
+    #[cfg(feature = "ignore-mouse")]
+    ignore_mouse: input::IgnoreMouse,
 }
 
 /// Connects to the compositor and binds every required global.
 /// The idle notification is not created yet: call `set_inhibited` for that.
-pub fn connect(timeout_ms: u32) -> Result<(EventQueue<State>, State), String> {
+pub fn connect(config: &Config) -> Result<(EventQueue<State>, State), String> {
     let conn = Connection::connect_to_env().map_err(|e| format!("Wayland connection: {e}"))?;
     let (globals, queue) =
         registry_queue_init::<State>(&conn).map_err(|e| format!("registry: {e}"))?;
@@ -114,7 +120,7 @@ pub fn connect(timeout_ms: u32) -> Result<(EventQueue<State>, State), String> {
     let state = State {
         notifier: bind(&globals, &qh, 1..=1)?,
         seat: bind(&globals, &qh, 1..=1)?,
-        timeout_ms,
+        timeout_ms: config.timeout_ms,
         notification: None,
         compositor: bind(&globals, &qh, 1..=4)?,
         viewporter: bind(&globals, &qh, 1..=1)?,
@@ -126,6 +132,8 @@ pub fn connect(timeout_ms: u32) -> Result<(EventQueue<State>, State), String> {
         overlays: Vec::new(),
         #[cfg(feature = "multimonitor")]
         outputs: outputs::bind_all(&globals, &qh),
+        #[cfg(feature = "ignore-mouse")]
+        ignore_mouse: input::IgnoreMouse::new(config.ignore_mouse),
     };
     Ok((queue, state))
 }
@@ -295,11 +303,24 @@ impl Dispatch<ExtIdleNotificationV1, ()> for State {
     ) {
         match event {
             ext_idle_notification_v1::Event::Idled => {
-                log(INFO, "idle: screen blanked");
+                // Logged only on an actual change: with `--ignore-mouse` we
+                // may still be blanked from a previous `idled`.
+                if !state.blanked {
+                    log(INFO, "idle: screen blanked");
+                }
                 state.show(qh);
             }
             ext_idle_notification_v1::Event::Resumed => {
-                log(INFO, "activity resumed: screen restored");
+                // `--ignore-mouse`: the overlays decide when to wake (see
+                // input.rs). Unless none is left (all closed by the compositor):
+                // then nothing could receive that input, so wake now.
+                #[cfg(feature = "ignore-mouse")]
+                if state.ignore_mouse.enabled && !state.overlays.is_empty() {
+                    return;
+                }
+                if state.blanked {
+                    log(INFO, "activity resumed: screen restored");
+                }
                 state.hide();
             }
             _ => {}
@@ -360,31 +381,40 @@ impl Dispatch<WlSeat, ()> for State {
         _: &Connection,
         qh: &QueueHandle<Self>,
     ) {
-        if let wl_seat::Event::Capabilities {
+        let wl_seat::Event::Capabilities {
             capabilities: WEnum::Value(caps),
         } = event
-            && caps.contains(wl_seat::Capability::Pointer)
-            && state.pointer.is_none()
-        {
+        else {
+            return;
+        };
+        if caps.contains(wl_seat::Capability::Pointer) && state.pointer.is_none() {
             state.pointer = Some(seat.get_pointer(qh, ()));
         }
+        #[cfg(feature = "ignore-mouse")]
+        input::seat_capabilities(state, seat, caps, qh);
     }
 }
 
 /// Hide the cursor whenever it enters one of our surfaces. `enter` is only sent
 /// for our own surfaces, and a `None` cursor surface means "no cursor"; other
-/// clients' cursors are unaffected.
+/// clients' cursors are unaffected. With `ignore-mouse`, the other pointer
+/// events go to `input::pointer_event`.
 impl Dispatch<WlPointer, ()> for State {
+    #[cfg_attr(not(feature = "ignore-mouse"), allow(unused_variables))]
     fn event(
-        _: &mut Self,
+        state: &mut Self,
         pointer: &WlPointer,
         event: wl_pointer::Event,
         _: &(),
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        if let wl_pointer::Event::Enter { serial, .. } = event {
-            pointer.set_cursor(serial, None, 0, 0);
+        match event {
+            wl_pointer::Event::Enter { serial, .. } => pointer.set_cursor(serial, None, 0, 0),
+            #[cfg(feature = "ignore-mouse")]
+            event => input::pointer_event(state, event),
+            #[cfg(not(feature = "ignore-mouse"))]
+            _ => {}
         }
     }
 }
