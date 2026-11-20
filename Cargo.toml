@@ -2,6 +2,11 @@
 name = "waysaver"
 version = "0.1.0"
 edition = "2024"
+description = "A minimal Wayland screensaver: black screen or any program as a theme, respecting inhibitors"
+repository = "https://github.com/pixmatic/waysaver"
+readme = "README.md"
+keywords = ["wayland", "screensaver", "idle", "layer-shell"]
+categories = ["command-line-utilities"]
 
 [dependencies]
 dbus = { version = "0.9.12", default-features = false }
@@ -23,3 +28,9 @@ ignore-mouse = []
 # <theme...> argument: run an external program (video, shader, browser...)
 # while idle; `blank` keeps the black screen.
 theme = ["rustix/process", "rustix/std"]
+
+# Small release binaries: about half the size, at the cost of a slower build.
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
