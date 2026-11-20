@@ -7,6 +7,7 @@
 //!
 //! A single thread blocks in poll() on all sockets: 0% CPU while idle.
 
+mod cli;
 mod inhibit;
 mod logging;
 mod wayland;
@@ -18,12 +19,24 @@ use rustix::event::{PollFd, PollFlags, poll};
 use logging::{ERR, INFO, log};
 
 fn main() -> ExitCode {
-    let Some(timeout_ms) = parse_timeout_ms() else {
-        log(ERR, "usage: wayvoid <idle-seconds>");
-        // 2 is the conventional exit code for command-line usage errors.
-        return ExitCode::from(2);
+    let config = match cli::parse(std::env::args().skip(1)) {
+        Ok(cli::Command::Run(config)) => config,
+        Ok(cli::Command::Help) => {
+            print!("{}", cli::usage());
+            return ExitCode::SUCCESS;
+        }
+        Ok(cli::Command::Version) => {
+            println!("wayvoid {}", env!("CARGO_PKG_VERSION"));
+            return ExitCode::SUCCESS;
+        }
+        Err(e) => {
+            log(ERR, &e);
+            eprint!("{}", cli::usage());
+            // 2 is the conventional exit code for command-line usage errors.
+            return ExitCode::from(2);
+        }
     };
-    match run(timeout_ms) {
+    match run(&config) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             log(ERR, &e);
@@ -32,26 +45,10 @@ fn main() -> ExitCode {
     }
 }
 
-/// Parses the single required argument: idle timeout in seconds (> 0).
-/// Returns it in milliseconds, as ext-idle-notify expects. `None` (usage
-/// error) if the argument is missing, repeated, not a number, zero, or too
-/// large to fit in milliseconds as a `u32` (over ~49 days).
-fn parse_timeout_ms() -> Option<u32> {
-    let mut args = std::env::args().skip(1);
-    match (args.next(), args.next()) {
-        (Some(arg), None) => arg
-            .parse::<u32>()
-            .ok()
-            .filter(|&s| s > 0)
-            .and_then(|s| s.checked_mul(1000)),
-        _ => None,
-    }
-}
-
 /// Sets everything up and runs the event loop. Only returns on fatal errors.
-fn run(timeout_ms: u32) -> Result<(), String> {
+fn run(config: &cli::Config) -> Result<(), String> {
     // Wayland is mandatory; the D-Bus sources are best-effort.
-    let (mut queue, mut state) = wayland::connect(timeout_ms)?;
+    let (mut queue, mut state) = wayland::connect(config.timeout_ms)?;
     let qh = queue.handle();
     let mut sources = inhibit::start();
 
@@ -59,7 +56,7 @@ fn run(timeout_ms: u32) -> Result<(), String> {
     state.set_inhibited(sources.iter().any(|s| s.is_inhibited()), &qh);
     log(
         INFO,
-        &format!("started, idle timeout {}s", timeout_ms / 1000),
+        &format!("started, idle timeout {}s", config.timeout_ms / 1000),
     );
 
     // `ready[i]` says whether `sources[i]` had data at the last poll(). The
