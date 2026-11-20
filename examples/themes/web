@@ -10,7 +10,7 @@ THEME_USAGE="web [--browser chrome|chromium|firefox] [URL]"
 #                    in the order above (alternatives are separated by "|")
 #   URL              default: a WebGL aquarium
 #
-# Example: wayvoid 300 web --browser firefox file:///home/me/screensaver/index.html
+# Example: waysaver 300 web --browser firefox file:///home/me/screensaver/index.html
 
 want=
 if [ "${1:-}" = --browser ]; then
@@ -30,7 +30,7 @@ esac
 
 # Each monitor gets its own browser profile, so the page isn't handed over to
 # a browser that is already open (the process would exit at once).
-profile=${XDG_CACHE_HOME:-$HOME/.cache}/wayvoid/profiles/${WAYVOID_OUTPUT:-screen}
+profile=${XDG_CACHE_HOME:-$HOME/.cache}/waysaver/profiles/${WAYSAVER_OUTPUT:-screen}
 case ${browser##*/} in
     firefox)
         mkdir -p "$profile/firefox"

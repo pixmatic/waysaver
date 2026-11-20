@@ -2,7 +2,7 @@
 //!
 //! One child per covered output. Each child gets its own process group, so
 //! stopping it (SIGTERM to the group) also reaches anything it spawned, and a
-//! parent-death signal, so it doesn't outlive wayvoid. Exits are noticed
+//! parent-death signal, so it doesn't outlive waysaver. Exits are noticed
 //! through a pidfd per child, polled by the main event loop: no SIGCHLD
 //! handler, no threads, no timers.
 //!
@@ -12,9 +12,9 @@
 //!
 //! A theme is any program, run directly (no shell). It is responsible for
 //! showing itself fullscreen on its output, e.g. `mpv --fs --fs-screen-name=...`;
-//! to use `$WAYVOID_OUTPUT` in its arguments, wrap it in `sh -c '...'`.
+//! to use `$WAYSAVER_OUTPUT` in its arguments, wrap it in `sh -c '...'`.
 //! A bare name is looked up first in the themes directory
-//! (`$XDG_CONFIG_HOME/wayvoid/themes`, see `themes_dir`), then in `PATH`, so
+//! (`$XDG_CONFIG_HOME/waysaver/themes`, see `themes_dir`), then in `PATH`, so
 //! users can keep their themes as small scripts and call them by name.
 //!
 //! This file holds the feature's CLI part (`Options`) and the process side
@@ -54,9 +54,9 @@ pub const SYNOPSIS_TAIL: &str = " <theme...>";
 pub const DESCRIPTION: &[&str] = &[
     "",
     "<theme...> is a program (and its arguments) to run while the screen is idle,",
-    "one instance per monitor (with multimonitor, $WAYVOID_OUTPUT holds the",
+    "one instance per monitor (with multimonitor, $WAYSAVER_OUTPUT holds the",
     "monitor's name). A bare name is looked up first in",
-    "$XDG_CONFIG_HOME/wayvoid/themes (~/.config/wayvoid/themes), then in PATH.",
+    "$XDG_CONFIG_HOME/waysaver/themes (~/.config/waysaver/themes), then in PATH.",
     "`blank` means a plain black screen. Options must come before <idle-seconds>.",
 ];
 
@@ -112,14 +112,14 @@ impl Options {
     }
 }
 
-/// The user's themes directory: `$XDG_CONFIG_HOME/wayvoid/themes`, or
-/// `~/.config/wayvoid/themes` when that variable is unset or empty.
+/// The user's themes directory: `$XDG_CONFIG_HOME/waysaver/themes`, or
+/// `~/.config/waysaver/themes` when that variable is unset or empty.
 fn themes_dir() -> Option<PathBuf> {
     let config = std::env::var_os("XDG_CONFIG_HOME")
         .filter(|dir| !dir.is_empty())
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|home| Path::new(&home).join(".config")))?;
-    Some(config.join("wayvoid/themes"))
+    Some(config.join("waysaver/themes"))
 }
 
 /// The path of theme `name` in `dir`, if `name` is a bare name (no `/`) and
@@ -286,7 +286,7 @@ impl Runner {
     }
 
     /// Starts the theme for `target`. `name` (the output's name, if known)
-    /// is exported as `WAYVOID_OUTPUT`. Failures are logged; returns whether
+    /// is exported as `WAYSAVER_OUTPUT`. Failures are logged; returns whether
     /// the child is running.
     pub fn start(&mut self, target: Option<WlOutput>, name: Option<&str>) -> bool {
         let mut cmd = std::process::Command::new(&self.argv[0]);
@@ -302,7 +302,7 @@ impl Runner {
             .stdout(stdout)
             .stderr(Stdio::piped());
         if let Some(name) = name {
-            cmd.env("WAYVOID_OUTPUT", name);
+            cmd.env("WAYSAVER_OUTPUT", name);
         }
         // Own process group: SIGTERM to the group reaches grandchildren too.
         cmd.process_group(0);
@@ -437,7 +437,7 @@ impl Runner {
     }
 }
 
-/// Don't leave children behind if wayvoid returns (fatal error): the
+/// Don't leave children behind if waysaver returns (fatal error): the
 /// parent-death signal covers being killed, this covers a normal exit.
 impl Drop for Runner {
     fn drop(&mut self) {
@@ -445,7 +445,7 @@ impl Drop for Runner {
     }
 }
 
-/// Whether `pid` is a descendant of wayvoid, by walking up its parent chain
+/// Whether `pid` is a descendant of waysaver, by walking up its parent chain
 /// in `/proc`. Used to ignore inhibitors requested by our own theme.
 /// A process that detached itself (double fork) is no longer recognized.
 pub fn is_own_descendant(pid: u32) -> bool {
@@ -501,7 +501,7 @@ mod tests {
 
     #[test]
     fn themes_directory() {
-        let dir = std::env::temp_dir().join(format!("wayvoid-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("waysaver-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("matrix"), "#!/bin/sh\n").unwrap();
         let found = dir.join("matrix").to_string_lossy().into_owned();

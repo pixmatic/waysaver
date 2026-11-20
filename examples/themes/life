@@ -5,7 +5,7 @@ THEME_VERSION="1.1"
 THEME_REQUIRES="ffplay"
 THEME_USAGE="life [--color RRGGBB] [--background RRGGBB]"
 
-# Example: wayvoid 300 life --color ff8800 --background 100800
+# Example: waysaver 300 life --color ff8800 --background 100800
 #
 # Options:
 #   --color RRGGBB        color of the living cells; default 00ff00 (green)

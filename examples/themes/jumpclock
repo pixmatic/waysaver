@@ -5,7 +5,7 @@ THEME_VERSION="1.1"
 THEME_REQUIRES="foot figlet"
 THEME_USAGE="jumpclock [--font NAME] [--color NAME] [--background RRGGBB] [SECONDS]"
 
-# Example: wayvoid 300 jumpclock --font slant --color cyan --background 101828 5
+# Example: waysaver 300 jumpclock --font slant --color cyan --background 101828 5
 #
 # Options:
 #   --font NAME           a figlet font (see /usr/share/figlet/fonts); default "big"
@@ -33,14 +33,14 @@ while (($#)); do
     esac
 done
 
-# Checked before opening the terminal, so errors reach wayvoid's log.
+# Checked before opening the terminal, so errors reach waysaver's log.
 figlet -f "$font" x >/dev/null 2>&1 || fail "unknown font: $font"
 declare -A codes=([black]=30 [red]=31 [green]=32 [yellow]=33 [blue]=34 [magenta]=35 [cyan]=36 [white]=37)
 [[ -n ${codes[$color]:-} ]] || fail "--color must be black, red, green, yellow, blue, magenta, cyan or white"
 [[ $background =~ ^[0-9a-fA-F]{6}$ ]] || fail "--background must be RRGGBB, e.g. 101828"
 [[ $every =~ ^[0-9]+$ ]] && ((every >= 1)) || fail "SECONDS must be a whole number, 1 or more"
 
-# Started by wayvoid: open a fullscreen terminal that runs this same script.
+# Started by waysaver: open a fullscreen terminal that runs this same script.
 # The short sleep lets it become fullscreen first, so the size is the final one.
 if [[ -z ${JUMPCLOCK_IN_TERMINAL:-} ]]; then
     export JUMPCLOCK_IN_TERMINAL=1

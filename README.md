@@ -1,10 +1,10 @@
-# wayvoid
+# waysaver
 
 A minimal screensaver for Wayland, written in Rust.
 
 After a period of inactivity it covers the screen with pure black, and removes it as soon as there is activity again. Optionally it can run any program as a theme instead: a video, an animated GIF, a terminal animation, a WebGL page, a GLSL shader...
 
-- **Tiny and idle-friendly**: a single thread blocked in `poll()`, 0% CPU while waiting, ~4 MB of memory. The compositor keeps track of idle time; wayvoid just sleeps until it is told.
+- **Tiny and idle-friendly**: a single thread blocked in `poll()`, 0% CPU while waiting, ~4 MB of memory. The compositor keeps track of idle time; waysaver just sleeps until it is told.
 - **No toolkit, no GPU**: raw Wayland protocols only. The black screen is a single 1x1 pixel stretched by the compositor.
 - **Respects inhibitors**: videos in the browser, games, `systemd-inhibit`...
 - **Not a screen locker**: there is no password and no authentication. Use a real locker (swaylock, hyprlock...) if you need one.
@@ -16,7 +16,7 @@ After a period of inactivity it covers the screen with pure black, and removes i
 - `libdbus-1`, present on any desktop (and its development files to build it).
 - Rust stable to build it.
 
-If the compositor lacks a protocol, wayvoid exits with an error naming it.
+If the compositor lacks a protocol, waysaver exits with an error naming it.
 
 ## Building
 
@@ -26,7 +26,7 @@ cargo build --release --features theme             # with themes
 cargo build --release --all-features               # everything
 ```
 
-The binary ends up in `target/release/wayvoid`.
+The binary ends up in `target/release/waysaver`.
 
 | Feature | What it adds |
 |---|---|
@@ -40,12 +40,12 @@ Features are independent and can be combined freely.
 ## Usage
 
 ```sh
-wayvoid [OPTIONS] <idle-seconds>                   # without the `theme` feature
-wayvoid [OPTIONS] <idle-seconds> <theme...>        # with it
+waysaver [OPTIONS] <idle-seconds>                   # without the `theme` feature
+waysaver [OPTIONS] <idle-seconds> <theme...>        # with it
 ```
 
 - `<idle-seconds>`: inactivity time before blanking (1 to 4294967).
-- `<theme...>` (feature `theme`): what to show while idle. `blank` is the plain black screen; anything else is a program and its arguments: either a theme from your [themes directory](#installing-the-example-themes) or [any command](#running-a-program-directly). Everything after the seconds belongs to the theme, so wayvoid's own options go **before** the seconds.
+- `<theme...>` (feature `theme`): what to show while idle. `blank` is the plain black screen; anything else is a program and its arguments: either a theme from your [themes directory](#installing-the-example-themes) or [any command](#running-a-program-directly). Everything after the seconds belongs to the theme, so waysaver's own options go **before** the seconds.
 
 Options (only those compiled in are accepted and shown by `--help`):
 
@@ -61,17 +61,17 @@ Whatever wakes the screen up (a key, a click) is swallowed: it never reaches the
 
 ## Themes
 
-A theme is what wayvoid shows instead of black. It is just a program: wayvoid runs it while the screen is idle and stops it on wake.
+A theme is what waysaver shows instead of black. It is just a program: waysaver runs it while the screen is idle and stops it on wake.
 
 ### Installing the example themes
 
-This repository ships ready-made themes in [`examples/themes/`](examples/themes). Copy them to your themes directory, `~/.config/wayvoid/themes/` (`$XDG_CONFIG_HOME/wayvoid/themes/`), and call them by name:
+This repository ships ready-made themes in [`examples/themes/`](examples/themes). Copy them to your themes directory, `~/.config/waysaver/themes/` (`$XDG_CONFIG_HOME/waysaver/themes/`), and call them by name:
 
 ```sh
-mkdir -p ~/.config/wayvoid/themes
-cp examples/themes/* ~/.config/wayvoid/themes/
+mkdir -p ~/.config/waysaver/themes
+cp examples/themes/* ~/.config/waysaver/themes/
 
-wayvoid 300 matrix
+waysaver 300 matrix
 ```
 
 A bare name is looked up in the themes directory first, then in `PATH`.
@@ -105,19 +105,19 @@ A bare name is looked up in the themes directory first, then in `PATH`.
 Everything after the theme's name is passed to it, so each theme takes its own options. Its first lines list them, with an example. Colors are names (`red`, `cyan`...) for terminal themes, `RRGGBB` for backgrounds, and any CSS color in browser themes.
 
 ```sh
-wayvoid 300 matrix --color cyan --background 001018
-wayvoid 300 clock --still --color yellow --background 1a1a2e
-wayvoid 300 marquee --font slant --color cyan --background 101828 "Back in 5 minutes"
-wayvoid 300 bonsai --message "Out for lunch"
-wayvoid 300 life --color ff8800 --background 100800
-wayvoid 300 text3d --font "DejaVu Serif" --color gold --background "#102030" Hello
-wayvoid 300 maze3d --size 20 --speed 0.7 --color 30
-wayvoid 300 pipes3d --speed 30 --pipes 20
-wayvoid 300 video --image-time 30 ~/Pictures/wallpapers ~/Videos/nature
-wayvoid 300 blur --dim 40 70
+waysaver 300 matrix --color cyan --background 001018
+waysaver 300 clock --still --color yellow --background 1a1a2e
+waysaver 300 marquee --font slant --color cyan --background 101828 "Back in 5 minutes"
+waysaver 300 bonsai --message "Out for lunch"
+waysaver 300 life --color ff8800 --background 100800
+waysaver 300 text3d --font "DejaVu Serif" --color gold --background "#102030" Hello
+waysaver 300 maze3d --size 20 --speed 0.7 --color 30
+waysaver 300 pipes3d --speed 30 --pipes 20
+waysaver 300 video --image-time 30 ~/Pictures/wallpapers ~/Videos/nature
+waysaver 300 blur --dim 40 70
 ```
 
-Mistakes, such as an unknown color, are reported in wayvoid's log (see [Logs](#logs)) and that screen stays black.
+Mistakes, such as an unknown color, are reported in waysaver's log (see [Logs](#logs)) and that screen stays black.
 
 ### Writing a theme
 
@@ -140,10 +140,10 @@ done
 exec foot -o colors-dark.background="$background" --fullscreen sh -c 'sleep 0.3; exec asciiquarium'
 ```
 
-- **Metadata** goes at the top, one `THEME_*="value"` per line, with **literal values** (no `$HOME`, no `$(...)`), so it can be read without running the theme: `grep -H '^THEME_DESCRIPTION' ~/.config/wayvoid/themes/*`.
+- **Metadata** goes at the top, one `THEME_*="value"` per line, with **literal values** (no `$HOME`, no `$(...)`), so it can be read without running the theme: `grep -H '^THEME_DESCRIPTION' ~/.config/waysaver/themes/*`.
 - `THEME_REQUIRES` lists the programs the theme needs; checking them makes a missing one show up clearly in the logs. Alternatives are written `a|b` and checked by the theme itself (see `web`).
-- `THEME_USAGE` shows its options, which it parses itself from its arguments. Check them **before** starting anything slow, and exit with an error message: it reaches wayvoid's log.
-- **`exec`** the final program, so it is the process wayvoid stops on wake (wayvoid stops the whole process group anyway).
+- `THEME_USAGE` shows its options, which it parses itself from its arguments. Check them **before** starting anything slow, and exit with an error message: it reaches waysaver's log.
+- **`exec`** the final program, so it is the process waysaver stops on wake (waysaver stops the whole process group anyway).
 - It must show itself **fullscreen** and keep running; one that exits within 2 seconds is considered broken (that monitor goes black). See [how themes work](#how-themes-work).
 - Write it in any language: in Python, the same `THEME_*="value"` lines are valid code (see `pipes3d`).
 
@@ -154,15 +154,15 @@ Tips learned from the examples:
 - **Browsers**: use a separate profile (`--user-data-dir`, or Firefox's `--profile` with `--new-instance`). Otherwise the page is handed to the browser you already have open and the process exits at once.
 - **mpv**: pass `--stop-screensaver=no`. A playing mpv otherwise asks the compositor not to blank, which may wake the screen right away.
 - **SDL programs** (pygame, games...): set `SDL_VIDEO_ALLOW_SCREENSAVER=1`, for the same reason.
-- **Several monitors** (`multimonitor`): one instance runs per monitor, with its name in `$WAYVOID_OUTPUT`, e.g. for `mpv --fs-screen-name`.
+- **Several monitors** (`multimonitor`): one instance runs per monitor, with its name in `$WAYSAVER_OUTPUT`, e.g. for `mpv --fs-screen-name`.
 
 ### Running a program directly
 
 A theme doesn't have to be installed: anything after the seconds can be a command, run as is. Handy to try something out before turning it into a theme:
 
 ```sh
-wayvoid 300 mpv --fs --no-osc --no-audio --loop-playlist=inf --stop-screensaver=no ~/Videos/aquarium.mp4
-wayvoid 300 foot --fullscreen sh -c 'sleep 0.3; exec cmatrix -b'
+waysaver 300 mpv --fs --no-osc --no-audio --loop-playlist=inf --stop-screensaver=no ~/Videos/aquarium.mp4
+waysaver 300 foot --fullscreen sh -c 'sleep 0.3; exec cmatrix -b'
 ```
 
 The command runs directly, without a shell: wrap it in `sh -c '...'` for variables, pipes or several commands.
@@ -172,29 +172,29 @@ The command runs directly, without a shell: wrap it in `sh -c '...'` for variabl
 `blank` is the plain black screen (and the only mode without the `theme` feature):
 
 ```sh
-wayvoid 300                    # build without `theme`
-wayvoid 300 blank              # build with `theme`
-wayvoid --ignore-mouse 600 blank
+waysaver 300                    # build without `theme`
+waysaver 300 blank              # build with `theme`
+waysaver --ignore-mouse 600 blank
 ```
 
 ### How themes work
 
-- wayvoid's own surface stays above everything and turns **transparent** while the theme runs. It still catches the input, hides the cursor and swallows the waking key, and `--ignore-mouse` keeps working.
+- waysaver's own surface stays above everything and turns **transparent** while the theme runs. It still catches the input, hides the cursor and swallows the waking key, and `--ignore-mouse` keeps working.
 - The theme must make itself **fullscreen** (or maximized and transparent). It runs directly, without a shell; wrap it in `sh -c '...'` for variables, pipes or several commands.
-- With `multimonitor` one instance runs per monitor, with its name in `$WAYVOID_OUTPUT` (e.g. `HDMI-A-1`).
-- On wake, the theme and anything it started get `SIGTERM`. It never outlives wayvoid.
+- With `multimonitor` one instance runs per monitor, with its name in `$WAYSAVER_OUTPUT` (e.g. `HDMI-A-1`).
+- On wake, the theme and anything it started get `SIGTERM`. It never outlives waysaver.
 - If the theme exits on its own it is restarted. If it exits within 2 seconds, it is considered broken: that monitor goes black instead.
 - Many programs ask not to be interrupted while they run (SDL games and players, browsers...). Requests made **through D-Bus** by the theme itself are recognized and ignored. Requests made **through Wayland** (`zwp_idle_inhibit`, e.g. mpv) can't be told apart, because the compositor handles them: they may wake the screen right away. Disable them in the theme (`mpv --stop-screensaver=no`).
 - `--backdrop` puts a black surface below the theme so the desktop isn't visible while it starts. It needs the compositor to stack fullscreen windows above the `top` layer; otherwise the black would hide the theme.
 
 ## Inhibitors
 
-wayvoid doesn't blank while something asks it not to:
+waysaver doesn't blank while something asks it not to:
 
 | Source | Who uses it |
 |---|---|
 | Wayland (`zwp_idle_inhibit`) | Chrome/Chromium, mpv, games, video players. Handled by the compositor. |
-| D-Bus `org.freedesktop.ScreenSaver` | Firefox, VLC, SDL applications... wayvoid provides this service itself. |
+| D-Bus `org.freedesktop.ScreenSaver` | Firefox, VLC, SDL applications... waysaver provides this service itself. |
 | logind (`systemd-inhibit --what=idle`) | Scripts, and anything you wrap with it (see below). |
 
 An inhibitor appearing while the screen is blank wakes it up.
@@ -219,16 +219,16 @@ systemd-inhibit --what=idle --who=retroarch --why="playing" retroarch
   systemd-inhibit --what=idle --why="presentation" sleep infinity   # Ctrl+C to end it
   ```
 
-It needs systemd-logind (or elogind). Only `--what=idle` matters to wayvoid; `systemd-inhibit`'s default (`idle:sleep:shutdown`) also blocks suspend and shutdown.
+It needs systemd-logind (or elogind). Only `--what=idle` matters to waysaver; `systemd-inhibit`'s default (`idle:sleep:shutdown`) also blocks suspend and shutdown.
 
 ## GNOME
 
-**wayvoid doesn't work on GNOME, and it won't.** Mutter (GNOME's compositor) deliberately doesn't offer the two protocols it relies on:
+**waysaver doesn't work on GNOME, and it won't.** Mutter (GNOME's compositor) deliberately doesn't offer the two protocols it relies on:
 
 - **`wlr-layer-shell`**, which lets a client place a surface above every window. GNOME reserves that for gnome-shell itself; an ordinary window can't guarantee it stays on top, nor that it gets the keyboard.
 - **`ext-idle-notify-v1`**, which tells a client when the user is idle.
 
-A GNOME backend could be built from a fullscreen window plus GNOME's D-Bus APIs, but it would be fragile: the panel and notifications could show on top, the waking key would reach other applications, and themes and `--ignore-mouse` wouldn't work reliably. Besides, GNOME already does what wayvoid's basic mode does: *Settings → Power → Screen Blank*, which respects inhibitors.
+A GNOME backend could be built from a fullscreen window plus GNOME's D-Bus APIs, but it would be fragile: the panel and notifications could show on top, the waking key would reach other applications, and themes and `--ignore-mouse` wouldn't work reliably. Besides, GNOME already does what waysaver's basic mode does: *Settings → Power → Screen Blank*, which respects inhibitors.
 
 The right way to build a screensaver for GNOME is a **separate project as a GNOME Shell extension**: extensions run inside gnome-shell, the only place with the privileges to draw above everything and handle input properly.
 
@@ -237,19 +237,19 @@ The right way to build a screensaver for GNOME is a **separate project as a GNOM
 Add it to your compositor's autostart, e.g. Sway:
 
 ```
-exec wayvoid 300 blank
+exec waysaver 300 blank
 ```
 
-Or as a systemd user service, `~/.config/systemd/user/wayvoid.service`:
+Or as a systemd user service, `~/.config/systemd/user/waysaver.service`:
 
 ```ini
 [Unit]
-Description=wayvoid screensaver
+Description=waysaver screensaver
 PartOf=graphical-session.target
 After=graphical-session.target
 
 [Service]
-ExecStart=%h/.local/bin/wayvoid 300 blank
+ExecStart=%h/.local/bin/waysaver 300 blank
 Restart=on-failure
 
 [Install]
@@ -257,14 +257,14 @@ WantedBy=graphical-session.target
 ```
 
 ```sh
-systemctl --user enable --now wayvoid.service
+systemctl --user enable --now waysaver.service
 ```
 
 (Your compositor must start `graphical-session.target` and pass `WAYLAND_DISPLAY` to the systemd user environment, which most setups already do.)
 
 ## Logs
 
-wayvoid logs to stderr. How much is set with `-l`/`--log-level`, by number or name:
+waysaver logs to stderr. How much is set with `-l`/`--log-level`, by number or name:
 
 | Level | Shows |
 |---|---|
@@ -275,8 +275,8 @@ wayvoid logs to stderr. How much is set with `-l`/`--log-level`, by number or na
 | `4`, `debug` | Everything it does (protocols bound, idle notifications, overlays, D-Bus calls, signals sent to themes...) plus **each line the theme prints**, on stdout or stderr. |
 
 ```sh
-wayvoid -l info 300 matrix
-wayvoid --log-level=debug 300 marquee --color pink   # see why a theme fails
+waysaver -l info 300 matrix
+waysaver --log-level=debug 300 marquee --color pink   # see why a theme fails
 ```
 
 Below `debug`, a theme's stdout is discarded; its stderr is read only to report why it failed.
@@ -284,8 +284,8 @@ Below `debug`, a theme's stdout is discarded; its stderr is read only to report 
 Under systemd the messages go to the journal with their priority, so they can be filtered there too:
 
 ```sh
-journalctl --user -u wayvoid -f          # follow
-journalctl --user -u wayvoid -p warning  # warnings and errors only
+journalctl --user -u waysaver -f          # follow
+journalctl --user -u waysaver -p warning  # warnings and errors only
 ```
 
 To also see every Wayland message, run it with `WAYLAND_DEBUG=1`.
@@ -293,5 +293,5 @@ To also see every Wayland message, run it with `WAYLAND_DEBUG=1`.
 ## Development
 
 - `scripts/check.sh`: formatting, then clippy (no warnings) and tests for **every combination** of features. Needs [cargo-hack](https://github.com/taiki-e/cargo-hack).
-- `scripts/nested.sh`: runs wayvoid inside a nested labwc (in a window, with its own D-Bus session), so it can be tested without blanking your real screen. `OUTPUTS=2 FEATURES=multimonitor scripts/nested.sh 5` gives two virtual monitors; inside, F1/F2 add or remove monitors.
+- `scripts/nested.sh`: runs waysaver inside a nested labwc (in a window, with its own D-Bus session), so it can be tested without blanking your real screen. `OUTPUTS=2 FEATURES=multimonitor scripts/nested.sh 5` gives two virtual monitors; inside, F1/F2 add or remove monitors.
 - Each feature lives in its own files, with an empty stub (`*_off.rs`) used when it is disabled; the core code has no `#[cfg]`. See the module documentation in `src/main.rs`.

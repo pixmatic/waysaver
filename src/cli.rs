@@ -1,6 +1,6 @@
 //! Command-line parsing, by hand (no `clap`).
 //!
-//! Base syntax: `wayvoid [OPTIONS] <idle-seconds>`. Optional features plug in
+//! Base syntax: `waysaver [OPTIONS] <idle-seconds>`. Optional features plug in
 //! through their facades (see "Module layout" in main.rs), so this file has no
 //! `#[cfg]`:
 //! - `ignore-mouse` (`wayland::input::Options`): the `--ignore-mouse` flag.
@@ -46,7 +46,7 @@ const BASE_OPTIONS: &[&str] = &[
 /// Full usage text, listing only what is compiled into this binary.
 pub fn usage() -> String {
     let mut text = format!(
-        "usage: wayvoid [OPTIONS] <idle-seconds>{}\n",
+        "usage: waysaver [OPTIONS] <idle-seconds>{}\n",
         theme::SYNOPSIS_TAIL
     );
     for line in theme::DESCRIPTION {

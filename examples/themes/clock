@@ -5,7 +5,7 @@ THEME_VERSION="1.2"
 THEME_REQUIRES="foot tty-clock"
 THEME_USAGE="clock [--still] [--color NAME] [--background RRGGBB]"
 
-# Example: wayvoid 300 clock --still --color yellow --background 1a1a2e
+# Example: waysaver 300 clock --still --color yellow --background 1a1a2e
 #
 # Options:
 #   --still               keep the clock in the center instead of bouncing

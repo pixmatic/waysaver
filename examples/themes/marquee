@@ -13,9 +13,9 @@ THEME_USAGE="marquee [--font NAME] [--color COLOR] [--background RRGGBB] [--spee
 #                   background color; default 000000 (black)
 #   --speed N       steps per second, 1-60; default 12
 #   --transparent   over the live desktop instead of a background
-#   TEXT            default: "wayvoid"
+#   TEXT            default: "waysaver"
 #
-# Example: wayvoid 300 marquee --font slant --color cyan --background 101828 "Back in 5 minutes"
+# Example: waysaver 300 marquee --font slant --color cyan --background 101828 "Back in 5 minutes"
 
 for dep in $THEME_REQUIRES; do
     command -v "$dep" >/dev/null || { echo "$0: $dep is not installed" >&2; exit 1; }
@@ -37,16 +37,16 @@ while (($#)); do
         *) break ;;
     esac
 done
-text=${*:-wayvoid}
+text=${*:-waysaver}
 
-# Checked before opening the terminal, so errors reach wayvoid's log.
+# Checked before opening the terminal, so errors reach waysaver's log.
 figlet -f "$font" x >/dev/null 2>&1 || fail "unknown font: $font"
 [[ $speed =~ ^[0-9]+$ ]] && ((speed >= 1 && speed <= 60)) || fail "--speed must be 1-60"
 declare -A codes=([red]=31 [green]=32 [yellow]=33 [blue]=34 [magenta]=35 [cyan]=36 [white]=37)
 [[ $color == cycle || -n ${codes[$color]:-} ]] || fail "unknown color: $color"
 [[ $background =~ ^[0-9a-fA-F]{6}$ ]] || fail "--background must be RRGGBB, e.g. 101828"
 
-# Started by wayvoid: open a terminal that runs this same script. The short
+# Started by waysaver: open a terminal that runs this same script. The short
 # sleep lets it become fullscreen first, so the size we read is the final one.
 if [[ -z ${MARQUEE_IN_TERMINAL:-} ]]; then
     export MARQUEE_IN_TERMINAL=1

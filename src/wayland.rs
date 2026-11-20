@@ -249,12 +249,12 @@ impl State {
     ) -> Overlay {
         let surface = self.compositor.create_surface(qh, ());
         let viewport = self.viewporter.get_viewport(&surface, qh, ());
-        // "wayvoid" is the namespace compositors may use in window rules.
+        // "waysaver" is the namespace compositors may use in window rules.
         let layer_surface = self.layer_shell.get_layer_surface(
             &surface,
             output.as_ref(),
             layer,
-            "wayvoid".into(),
+            "waysaver".into(),
             qh,
             (),
         );
@@ -318,7 +318,7 @@ where
 /// The memfd can be dropped on return: `create_pool` duplicates the fd when
 /// queueing the request, and the compositor maps the memory on its side.
 fn pixel_buffer(shm: &WlShm, qh: &QueueHandle<State>, argb: u32) -> Result<WlBuffer, String> {
-    let fd = rustix::fs::memfd_create("wayvoid", rustix::fs::MemfdFlags::CLOEXEC)
+    let fd = rustix::fs::memfd_create("waysaver", rustix::fs::MemfdFlags::CLOEXEC)
         .map_err(|e| format!("memfd_create: {e}"))?;
     let mut file = File::from(fd);
     // ARGB8888 is a native-endian 32-bit value.

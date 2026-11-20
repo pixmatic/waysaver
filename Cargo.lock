@@ -213,7 +213,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "wayvoid"
+name = "waysaver"
 version = "0.1.0"
 dependencies = [
  "dbus",

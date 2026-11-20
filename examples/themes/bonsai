@@ -5,7 +5,7 @@ THEME_VERSION="1.1"
 THEME_REQUIRES="foot cbonsai"
 THEME_USAGE="bonsai [--message TEXT] [--background RRGGBB]"
 
-# Example: wayvoid 300 bonsai --message "Back soon" --background 0d1a0d
+# Example: waysaver 300 bonsai --message "Back soon" --background 0d1a0d
 #
 # Options:
 #   --message TEXT        a message next to the tree

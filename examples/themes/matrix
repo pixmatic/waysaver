@@ -5,7 +5,7 @@ THEME_VERSION="1.1"
 THEME_REQUIRES="foot cmatrix"
 THEME_USAGE="matrix [--color NAME] [--background RRGGBB]"
 
-# Example: wayvoid 300 matrix --color cyan --background 001018
+# Example: waysaver 300 matrix --color cyan --background 001018
 #
 # Options:
 #   --color NAME          black, red, green, yellow, blue, magenta, cyan or white; default green

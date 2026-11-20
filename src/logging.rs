@@ -63,7 +63,7 @@ pub fn enabled(priority: u8) -> bool {
 
 /// Writes one log line to stderr, if the level allows it.
 /// In the journal: `<N>msg`, so the priority is kept and filterable (`-p`).
-/// In a terminal: `wayvoid: msg`.
+/// In a terminal: `waysaver: msg`.
 pub fn log(priority: u8, msg: &str) {
     if !enabled(priority) {
         return;
@@ -71,7 +71,7 @@ pub fn log(priority: u8, msg: &str) {
     if stderr_is_journal() {
         eprintln!("<{priority}>{msg}");
     } else {
-        eprintln!("wayvoid: {msg}");
+        eprintln!("waysaver: {msg}");
     }
 }
 

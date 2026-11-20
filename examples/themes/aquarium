@@ -5,7 +5,7 @@ THEME_VERSION="1.1"
 THEME_REQUIRES="foot asciiquarium"
 THEME_USAGE="aquarium [--background RRGGBB]"
 
-# Example: wayvoid 300 aquarium --background 001a33
+# Example: waysaver 300 aquarium --background 001a33
 #
 # Options:
 #   --background RRGGBB   background color; default 000000 (black)

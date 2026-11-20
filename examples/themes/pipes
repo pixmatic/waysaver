@@ -5,7 +5,7 @@ THEME_VERSION="1.1"
 THEME_REQUIRES="foot pipes.sh"
 THEME_USAGE="pipes [--count N] [--color NAME] [--background RRGGBB]"
 
-# Example: wayvoid 300 pipes --count 5 --background 202020
+# Example: waysaver 300 pipes --count 5 --background 202020
 #
 # Options:
 #   --count N             pipes at the same time, 1-20; default 3

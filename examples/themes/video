@@ -9,7 +9,7 @@ THEME_USAGE="video [--image-time SECONDS] [FILE-OR-FOLDER...]"
 #   --image-time SECONDS   how long each still image stays; default 10
 #   FILE-OR-FOLDER         default: ~/Videos
 #
-# Example: wayvoid 300 video --image-time 30 ~/Pictures/wallpapers ~/Videos/nature
+# Example: waysaver 300 video --image-time 30 ~/Pictures/wallpapers ~/Videos/nature
 
 for dep in $THEME_REQUIRES; do
     command -v "$dep" >/dev/null || { echo "$0: $dep is not installed" >&2; exit 1; }
@@ -31,4 +31,4 @@ esac
 # instance goes to its own monitor.
 exec mpv --fs --no-osc --no-audio --shuffle --loop-playlist=inf \
     --image-display-duration="$image_time" --stop-screensaver=no \
-    ${WAYVOID_OUTPUT:+--fs-screen-name="$WAYVOID_OUTPUT"} "$@"
+    ${WAYSAVER_OUTPUT:+--fs-screen-name="$WAYSAVER_OUTPUT"} "$@"

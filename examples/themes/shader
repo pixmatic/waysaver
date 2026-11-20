@@ -8,14 +8,14 @@ THEME_USAGE="shader [FILE.frag]"
 # FILE.frag: a fragment shader using glslViewer's uniforms (u_time,
 # u_resolution, u_mouse...). Without one, a built-in plasma shader is used.
 #
-# Example: wayvoid 300 shader ~/shaders/tunnel.frag
+# Example: waysaver 300 shader ~/shaders/tunnel.frag
 
 for dep in $THEME_REQUIRES; do
     command -v "$dep" >/dev/null || { echo "$0: $dep is not installed" >&2; exit 1; }
 done
 
 if [ $# -eq 0 ]; then
-    set -- "${XDG_CACHE_HOME:-$HOME/.cache}/wayvoid/plasma.frag"
+    set -- "${XDG_CACHE_HOME:-$HOME/.cache}/waysaver/plasma.frag"
     mkdir -p "${1%/*}"
     cat > "$1" <<'FRAG'
 uniform vec2 u_resolution;

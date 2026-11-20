@@ -9,7 +9,7 @@ THEME_USAGE="blur [--dim PERCENT] [PERCENT]"
 #   PERCENT          how much to blur, 0-100; default 50
 #   --dim PERCENT    also darken it, 0-100; default 0
 #
-# Example: wayvoid 300 blur --dim 40 70
+# Example: waysaver 300 blur --dim 40 70
 #
 # The snapshot is frozen: on Wayland only the compositor can see other
 # windows, so a live blur is impossible for a program. It is taken with grim,
@@ -38,15 +38,15 @@ blur=${1:-50}
 is_percent "$blur" || fail "the blur must be a percentage (0-100)"
 is_percent "$dim" || fail "--dim must be a percentage (0-100)"
 
-dir=${XDG_RUNTIME_DIR:-/tmp}/wayvoid-blur
+dir=${XDG_RUNTIME_DIR:-/tmp}/waysaver-blur
 mkdir -p "$dir"
-shot=$dir/${WAYVOID_OUTPUT:-screen}.png
+shot=$dir/${WAYSAVER_OUTPUT:-screen}.png
 
-# By now wayvoid's cover on this monitor has turned transparent; give the
+# By now waysaver's cover on this monitor has turned transparent; give the
 # compositor a moment to show the desktop again, then take the snapshot (of
 # this monitor only, with multimonitor).
 sleep 0.3
-grim ${WAYVOID_OUTPUT:+-o "$WAYVOID_OUTPUT"} "$shot" || exit 1
+grim ${WAYSAVER_OUTPUT:+-o "$WAYSAVER_OUTPUT"} "$shot" || exit 1
 
 # A gaussian blur (sigma up to 40 pixels) and a darkening (a multiplier).
 filter=$(awk -v b="$blur" -v d="$dim" 'BEGIN {
@@ -57,4 +57,4 @@ ffmpeg -loglevel error -y -i "$shot" -vf "$filter" "$shot.blurred.png" || exit 1
 # --stop-screensaver=no: a playing mpv otherwise asks the compositor not to
 # blank, which may wake the screen right away.
 exec mpv --fs --no-osc --no-audio --image-display-duration=inf --stop-screensaver=no \
-    ${WAYVOID_OUTPUT:+--fs-screen-name="$WAYVOID_OUTPUT"} "$shot.blurred.png"
+    ${WAYSAVER_OUTPUT:+--fs-screen-name="$WAYSAVER_OUTPUT"} "$shot.blurred.png"

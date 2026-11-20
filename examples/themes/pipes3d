@@ -12,7 +12,7 @@ THEME_USAGE="pipes3d [--speed N] [--pipes N] [--size N] [--background RRGGBB]"
 #   --background RRGGBB
 #               background color; default 000000 (black)
 #
-# Example: wayvoid 300 pipes3d --speed 30 --pipes 20 --background 0a1020
+# Example: waysaver 300 pipes3d --speed 30 --pipes 20 --background 0a1020
 #
 # Plain pygame drawing, no OpenGL: every segment is a few shaded lines and
 # every joint a few shaded circles, drawn back to front.
@@ -24,7 +24,7 @@ import random
 import sys
 
 # SDL disables the screensaver by default, through Wayland's idle inhibitor
-# too; wayvoid can't tell that request apart from others, and it would wake
+# too; waysaver can't tell that request apart from others, and it would wake
 # the screen right away.
 os.environ["SDL_VIDEO_ALLOW_SCREENSAVER"] = "1"
 os.environ["PYGAME_HIDE_SUPPORT_PROMPT"] = "1"

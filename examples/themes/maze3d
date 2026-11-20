@@ -11,7 +11,7 @@ THEME_USAGE="maze3d [--size N] [--speed N] [--color HUE]"
 #   --color HUE the walls' hue, 0-360 (0 red, 120 green, 240 blue...);
 #               default: a random one for each maze
 #
-# Example: wayvoid 300 maze3d --size 20 --speed 0.7 --color 30
+# Example: waysaver 300 maze3d --size 20 --speed 0.7 --color 30
 #
 # The page is plain HTML and JavaScript (no libraries, no network), written to
 # the cache directory and opened in a kiosk-mode browser. It draws the maze by
@@ -38,7 +38,7 @@ done
 # would exit at once).
 open_page() {
     local url="file://$1#$2" profile
-    profile=${XDG_CACHE_HOME:-$HOME/.cache}/wayvoid/profiles/${WAYVOID_OUTPUT:-screen}
+    profile=${XDG_CACHE_HOME:-$HOME/.cache}/waysaver/profiles/${WAYSAVER_OUTPUT:-screen}
     if browser=$(command -v google-chrome-stable || command -v chromium); then
         exec "$browser" --kiosk --no-first-run --no-default-browser-check --ozone-platform=wayland \
             --user-data-dir="$profile/chrome" "$url"
@@ -50,7 +50,7 @@ open_page() {
     exit 1
 }
 
-page=${XDG_CACHE_HOME:-$HOME/.cache}/wayvoid/pages/maze3d.html
+page=${XDG_CACHE_HOME:-$HOME/.cache}/waysaver/pages/maze3d.html
 mkdir -p "${page%/*}"
 cat > "$page" <<'EOF'
 <!doctype html>

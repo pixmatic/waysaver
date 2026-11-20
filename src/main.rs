@@ -1,4 +1,4 @@
-//! wayvoid: a minimal Wayland screensaver.
+//! waysaver: a minimal Wayland screensaver.
 //!
 //! After N seconds of inactivity it covers the screen with black, and removes
 //! it as soon as activity resumes. Idle time and inhibitors come from:
@@ -43,7 +43,7 @@ fn main() -> ExitCode {
             return ExitCode::SUCCESS;
         }
         Ok(cli::Command::Version) => {
-            println!("wayvoid {}", env!("CARGO_PKG_VERSION"));
+            println!("waysaver {}", env!("CARGO_PKG_VERSION"));
             return ExitCode::SUCCESS;
         }
         Err(e) => {

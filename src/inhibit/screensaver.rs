@@ -30,7 +30,7 @@ struct Inhibitor {
     /// Unique bus name of the caller, used to drop it if the caller exits.
     owner: String,
     app: String,
-    /// Requested by wayvoid's own theme (e.g. one using SDL, which
+    /// Requested by waysaver's own theme (e.g. one using SDL, which
     /// inhibits by default). Kept so the caller gets a normal reply and can
     /// release it, but never counted: otherwise starting the theme would
     /// unblank the screen and stop the theme, in a loop. Always `false`
@@ -126,7 +126,7 @@ impl ScreenSaver {
                         member.as_deref()
                     ),
                 );
-                error(msg, "UnknownMethod", c"method not supported by wayvoid")
+                error(msg, "UnknownMethod", c"method not supported by waysaver")
             }
         };
         // Callers may flag that they don't want a reply.
@@ -165,7 +165,7 @@ impl ScreenSaver {
         });
     }
 
-    /// Whether the bus client `owner` is a process started by wayvoid (its
+    /// Whether the bus client `owner` is a process started by waysaver (its
     /// theme, or anything it spawned). Asks the bus daemon for the
     /// client's PID; a blocking call, but only made once per `Inhibit`, and
     /// skipped entirely without the `theme` feature.

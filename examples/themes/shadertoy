@@ -9,7 +9,7 @@ THEME_USAGE="shadertoy [ID]"
 # (https://www.shadertoy.com/view/XsXXDn); default XsXXDn. It opens the
 # shader's embeddable page, without controls.
 #
-# Example: wayvoid 300 shadertoy XsXXDn
+# Example: waysaver 300 shadertoy XsXXDn
 
 id=${1:-XsXXDn}
 case $id in
@@ -24,7 +24,7 @@ browser=$(command -v google-chrome-stable || command -v chromium || command -v f
     echo "$0: Chrome, Chromium or Firefox is required" >&2
     exit 1
 }
-profile=${XDG_CACHE_HOME:-$HOME/.cache}/wayvoid/profiles/${WAYVOID_OUTPUT:-screen}
+profile=${XDG_CACHE_HOME:-$HOME/.cache}/waysaver/profiles/${WAYSAVER_OUTPUT:-screen}
 case ${browser##*/} in
     firefox)
         mkdir -p "$profile/firefox"
